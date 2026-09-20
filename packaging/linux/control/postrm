@@ -1,0 +1,19 @@
+#!/bin/sh
+# ThingsManager 卸载后脚本：purge 时删除数据目录与服务账号（remove 时保留数据）
+set -e
+
+if [ "$1" = "purge" ]; then
+    rm -rf /var/lib/thingsmanager
+    if getent passwd thingsmanager >/dev/null 2>&1; then
+        deluser --system thingsmanager >/dev/null 2>&1 || userdel thingsmanager >/dev/null 2>&1 || true
+    fi
+    if getent group thingsmanager >/dev/null 2>&1; then
+        delgroup --system thingsmanager >/dev/null 2>&1 || groupdel thingsmanager >/dev/null 2>&1 || true
+    fi
+fi
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

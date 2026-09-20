@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F4FAFF" />
+      <stop offset="100%" stop-color="#E1F0FA" />
+    </linearGradient>
+    <linearGradient id="boxGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4DB8FF" />
+      <stop offset="100%" stop-color="#0080FF" />
+    </linearGradient>
+    <linearGradient id="lidGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A8D8FF" />
+      <stop offset="100%" stop-color="#4DB8FF" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#007AFF" flood-opacity="0.12" />
+    </filter>
+  </defs>
+
+  <!-- 浅天蓝渐变底板（不变） -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+
+  <!-- 所有图形元素整体放大 1.25 倍，并以画布中心为锚点居中 -->
+  <g transform="translate(256, 256) scale(1.25) translate(-256, -256)">
+    
+    <!-- 盒子主体（带柔和投影） -->
+    <g filter="url(#shadow)">
+      <rect x="136" y="216" width="240" height="150" rx="24" fill="url(#boxGrad)" />
+    </g>
+
+    <!-- 盒体顶部高光线 -->
+    <path d="M 136 216 L 376 216" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="4" fill="none" />
+
+    <!-- 盒子内部半透明空腔 -->
+    <rect x="156" y="236" width="200" height="110" rx="16" fill="#FFFFFF" fill-opacity="0.2" />
+
+    <!-- 三个白色圆点（库存物品） -->
+    <circle cx="205" cy="320" r="12" fill="#FFFFFF" fill-opacity="0.9" />
+    <circle cx="256" cy="320" r="12" fill="#FFFFFF" fill-opacity="0.9" />
+    <circle cx="307" cy="320" r="12" fill="#FFFFFF" fill-opacity="0.9" />
+
+    <!-- 绿色对勾（右下角完成标记） -->
+    <path d="M 285 340 L 320 375 L 385 310" 
+          fill="none" stroke="#10B981" stroke-width="26" 
+          stroke-linecap="round" stroke-linejoin="round" />
+
+    <!-- 翻开的盒盖 -->
+    <path d="M 136 216 L 256 112 L 376 216" 
+          fill="none" stroke="url(#lidGrad)" stroke-width="24" 
+          stroke-linecap="round" stroke-linejoin="round" />
+
+    <!-- 盒盖转轴装饰点 -->
+    <circle cx="256" cy="112" r="6" fill="#FFFFFF" fill-opacity="0.6" />
+  </g>
+</svg>

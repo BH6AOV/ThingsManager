@@ -1,0 +1,89 @@
+# ThingsManager 服务端 RPM 规格
+# 由 packaging/linux/build-rpm.sh 通过 sed 注入：__VERSION__ __PAYLOAD__（包架构由 --target 决定）
+#
+# 说明：载荷（app 代码 + 内嵌 Node 运行时 + systemd unit + /etc 环境文件）已在构建脚本里
+#       组装完毕，本 spec 只负责把它们收进 RPM 并配置 systemd 常驻。
+
+# 载荷是现成文件（含官方 Node 二进制），不做 strip / debuginfo，避免损坏运行时
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+
+Name:           thingsmanager
+Version:        __VERSION__
+Release:        1%{?dist}
+Summary:        ThingsManager - 轻量仓库管理（服务端 · 开源版）
+License:        AGPL-3.0-or-later
+URL:            https://github.com/BH6AOV/ThingsManager
+# 故意不写 BuildArch：包架构由 rpmbuild --target 决定（build-rpm.sh 传 x86_64 / aarch64）。
+# 写了 BuildArch 反而会触发 rpm 的"构建架构兼容性"检查 —— 在 x86_64 上出 aarch64 包时会直接
+# 报 "No compatible architectures found for build" 而中止（该检查只存在于 BuildArch 这条路径）。
+# 本包载荷全是现成文件（含官方 Node 二进制），不做任何本地编译，因此跨架构构建是安全的。
+AutoReqProv:    no
+Requires:       shadow-utils
+
+%description
+单机运行、无需外部数据库的仓库管理系统：出入库 / 盘点 / 单据流水 / SN 追踪 / 专项台账，
+支持 xlsx 模板导出、PDF 与二维码、扫码导入、多账号权限、互联仓库（只读查表 / 跨库流转）。
+
+本包内嵌精简 Node 运行时（无需另装 Node.js / 数据库），安装后由 systemd 以
+thingsmanager.service 常驻运行，可用 systemctl 启停、查看状态与日志。
+
+许可证：代码为 GNU AGPL-3.0-or-later（可自由使用 / 修改 / 分发，含商用；但分发或把修改版
+作为网络服务提供时，须以同一许可证公开完整源代码、保留作者署名并注明修改）；
+Logo / 赞赏码 / 模板等品牌与素材保留所有权利。完整声明见包内 LICENSE 与 NOTICE。
+
+%prep
+# 载荷已在构建阶段组装完毕，无需解包
+
+%install
+rm -rf %{buildroot}
+mkdir -p %{buildroot}
+cp -a __PAYLOAD__/. %{buildroot}/
+mkdir -p %{buildroot}/var/lib/thingsmanager
+
+%files
+/opt/thingsmanager
+/usr/bin/thingsmanager
+/lib/systemd/system/thingsmanager.service
+%config(noreplace) /etc/thingsmanager/thingsmanager.env
+%attr(0750,thingsmanager,thingsmanager) %dir /var/lib/thingsmanager
+
+%pre
+getent group thingsmanager >/dev/null 2>&1 || groupadd -r thingsmanager
+getent passwd thingsmanager >/dev/null 2>&1 || useradd -r -g thingsmanager -d /var/lib/thingsmanager -s /usr/sbin/nologin -c "ThingsManager" thingsmanager
+exit 0
+
+%post
+mkdir -p /var/lib/thingsmanager
+chown thingsmanager:thingsmanager /var/lib/thingsmanager
+chmod 750 /var/lib/thingsmanager
+if [ "$1" -eq 1 ]; then
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable thingsmanager.service >/dev/null 2>&1 || true
+        systemctl restart thingsmanager.service >/dev/null 2>&1 || true
+    fi
+fi
+exit 0
+
+%preun
+if [ "$1" -eq 0 ]; then
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop thingsmanager.service >/dev/null 2>&1 || true
+        systemctl disable thingsmanager.service >/dev/null 2>&1 || true
+    fi
+fi
+exit 0
+
+%postun
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+if [ "$1" -eq 0 ]; then
+    # 卸载（非升级）时清理服务账号；数据目录 /var/lib/thingsmanager 保留（保护数据）
+    getent passwd thingsmanager >/dev/null 2>&1 && userdel thingsmanager >/dev/null 2>&1
+    getent group thingsmanager >/dev/null 2>&1 && groupdel thingsmanager >/dev/null 2>&1
+fi
+exit 0
+
+%changelog

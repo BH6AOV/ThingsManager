@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ThingsManager · 轻量仓库管理
+GenericName=仓库管理
+Comment=轻量仓库管理（服务端，数据保存在本机）
+Exec=thingsmanager
+Icon=thingsmanager
+Terminal=true
+Categories=Office;Database;
+Keywords=仓库;库存;入库;出库;盘点;warehouse;inventory;
+StartupNotify=false
