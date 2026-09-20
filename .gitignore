@@ -1,0 +1,32 @@
+# 构建产物与依赖（不入库）
+node_modules/
+dist/
+data/
+.cache/
+release-notes.md
+*.log
+.DS_Store
+
+# 内部工作流文件：仅本地保留，不随仓库发布
+#   sync.ps1        代码 / 打包源的单向同步脚本（维护者工具）
+#   overrides/      开源版差异文件的来源目录（同步时会应用到仓库根，结果已在仓库里）
+#   DIFFERENCES.md  根目录版 ↔ 开源版 的差异记录表（含内部版信息，不对外）
+sync.ps1
+overrides/
+DIFFERENCES.md
+
+# 本地验证产物
+dist-verify/
+
+# 打包中间产物
+packaging/**/stage/
+packaging/**/stage-*/
+packaging/node-*
+packaging/*.tar.gz
+packaging/*.tar.xz
+packaging/*.zip
+*.deb
+*.rpm
+*.AppImage
+*.AppImage.zsync
+*.squashfs

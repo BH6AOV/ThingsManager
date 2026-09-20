@@ -1,0 +1,29 @@
+{
+  "name": "thingsmanager",
+  "version": "0.10.7",
+  "license": "AGPL-3.0-or-later",
+  "private": true,
+  "description": "轻量 Web 仓库管理：出入库/盘库/清单 xlsx 模板导出 + 可选 SN 管理（SQLite，最小后端）",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.8",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "jpeg-js": "^0.4.4",
+    "jsqr": "^1.4.0",
+    "jszip": "^3.10.1",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^10.0.1",
+    "pdfkit": "^0.20.2",
+    "pngjs": "^7.0.0",
+    "qrcode": "^1.5.4"
+  }
+}

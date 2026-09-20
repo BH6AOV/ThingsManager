@@ -1,0 +1,20 @@
+Package: thingsmanager
+Version: __VERSION__
+Section: admin
+Priority: optional
+Architecture: __ARCH__
+Maintainer: 橙子木 <czm233@ypa.moe>
+Installed-Size: __INSTALLED_SIZE__
+Depends: adduser
+Homepage: https://github.com/BH6AOV/ThingsManager
+Description: ThingsManager · 轻量仓库管理（开源版 · 服务端）
+ 单机运行、无需外部数据库的仓库管理系统：出入库 / 盘点 / 单据流水 / SN 追踪 / 专项台账，
+ 支持 xlsx 模板导出、PDF 与二维码、扫码导入、多账号权限、互联仓库（只读查表 / 跨库流转），
+ 数据全部保存在本机（默认 /var/lib/thingsmanager）。
+ .
+ 本包内嵌精简 Node 运行时（无需另装 Node.js / 数据库），安装后由 systemd 以
+ thingsmanager.service 常驻运行，可用 systemctl 启停、查看状态与日志。
+ .
+ 许可证：代码为 GNU AGPL-3.0-or-later（分发或把修改版作为网络服务提供时，须公开
+ 完整源代码、保留作者署名并注明修改）；Logo / 赞赏码 / 模板等品牌与素材保留所有权利。
+ 完整声明见包内 LICENSE 与 NOTICE；商业授权请联系作者。

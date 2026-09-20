@@ -1,0 +1,313 @@
+name: Release
+
+# 发版流程：把版本号改好（package.json / .node-version / 变更日志）→ 提交 → 打 v* 标签并推送
+#   git tag v0.10.3 && git push origin main --tags
+# 本工作流会自动：校验版本一致性 → 构建各平台产物 → 生成源码包 → 创建/更新 GitHub Release
+# 也支持手动触发（Actions → Release → Run workflow），可选 dry_run 只构建不发版。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（留空 = 使用 package.json 的版本）'
+        required: false
+        type: string
+      dry_run:
+        description: '只构建、不创建 Release'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------- 版本校验
+  setup:
+    name: 校验版本号
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 读取并校验版本
+        id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg_ver="$(jq -r '.version' package.json)"
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            tag="v${{ inputs.version }}"
+          else
+            tag="v${pkg_ver}"
+          fi
+          want="${tag#v}"
+          echo "package.json=${pkg_ver}  标签=${tag}"
+          if [ "${want}" != "${pkg_ver}" ]; then
+            echo "::error::标签 ${tag} 与 package.json 的版本 ${pkg_ver} 不一致：请先统一版本号（package.json / 变更日志）再打标签"
+            exit 1
+          fi
+          case "${pkg_ver}" in
+            *-*) pre=true ;;
+            *)   pre=false ;;
+          esac
+          {
+            echo "version=${pkg_ver}"
+            echo "tag=${tag}"
+            echo "prerelease=${pre}"
+          } >> "${GITHUB_OUTPUT}"
+
+  # ------------------------------------------------------- Linux deb/rpm/AppImage
+  linux:
+    name: Linux ${{ matrix.pkg }} · ${{ matrix.arch }}
+    needs: setup
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      # 排列组合：3 种包 × 2 种架构（x86/32 位不支持，原因见 packaging/README.md「支持矩阵」）
+      matrix:
+        arch: [amd64, arm64]
+        pkg: [deb, rpm, appimage]
+    steps:
+      - uses: actions/checkout@v4
+      - name: 读取内嵌 Node 版本
+        id: node
+        shell: bash
+        run: echo "v=$(tr -d ' \r\n' < .node-version)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.node.outputs.v }}
+          cache: npm
+      - name: 安装打包工具
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm squashfs-tools file
+      - name: 安装运行依赖（仅生产依赖）
+        run: npm ci --omit=dev
+      - name: 构建 ${{ matrix.pkg }}（${{ matrix.arch }}）
+        run: bash packaging/linux/build-${{ matrix.pkg }}.sh ${{ matrix.arch }} dist
+      - name: 校验产物命名
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver='${{ needs.setup.outputs.version }}'
+          case '${{ matrix.arch }}' in amd64) cpu=AMD64 ;; arm64) cpu=ARM64 ;; esac
+          case '${{ matrix.pkg }}' in appimage) ext=AppImage ;; *) ext='${{ matrix.pkg }}' ;; esac
+          f="dist/ThingsManager_${ver}_linux_${cpu}.${ext}"
+          if [ ! -f "$f" ]; then echo '::error::缺少产物 '"$f"; ls -lh dist || true; exit 1; fi
+          echo "产物就绪：$f（$(du -h "$f" | cut -f1)）"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.pkg }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # ------------------------------------------------------------- Windows 安装包
+  windows:
+    name: Windows 安装包
+    needs: setup
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: 读取内嵌 Node 版本
+        id: node
+        shell: pwsh
+        run: |
+          $v = (Get-Content .node-version -Raw).Trim()
+          "v=$v" >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.node.outputs.v }}
+          cache: npm
+      - name: 安装运行依赖（仅生产依赖）
+        run: npm ci --omit=dev
+      - name: 安装 Inno Setup
+        run: choco install innosetup -y --no-progress
+      - name: 构建安装包
+        shell: pwsh
+        run: ./packaging/windows/build.ps1 -Arch ${{ matrix.arch }} -Version ${{ needs.setup.outputs.version }} -OutDir dist
+      - name: 校验产物命名
+        shell: pwsh
+        run: |
+          $cpu = if ('${{ matrix.arch }}' -eq 'arm64') { 'ARM64' } else { 'AMD64' }
+          $f = "dist/ThingsManager_${{ needs.setup.outputs.version }}_windows_${cpu}.exe"
+          if (-not (Test-Path $f)) { Write-Host 'dist 内容：'; Get-ChildItem dist | Select-Object Name; throw "缺少产物 $f" }
+          # 注意：不要写 Write-Host "..." -f $x —— PowerShell 会把 -f 当成 -ForegroundColor 的缩写而报错
+          $mb = [math]::Round((Get-Item $f).Length / 1MB, 2)
+          if ($mb -lt 10) { throw "产物体积异常：$f（$mb MB）" }
+          Write-Host "产物就绪：$f（$mb MB）"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # ------------------------------------------------------ 产物矩阵完整性校验
+  verify:
+    name: 校验产物矩阵完整性
+    needs: [setup, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: 断言所有组合都已产出
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver='${{ needs.setup.outputs.version }}'
+          want=()
+          for cpu in AMD64 ARM64; do
+            want+=("ThingsManager_${ver}_windows_${cpu}.exe")
+            for ext in deb rpm AppImage; do
+              want+=("ThingsManager_${ver}_linux_${cpu}.${ext}")
+            done
+          done
+          miss=0
+          for f in "${want[@]}"; do
+            if [ -f "artifacts/$f" ]; then echo "[OK] $f  ($(du -h "artifacts/$f" | cut -f1))";
+            else echo "::error::缺少产物：$f"; miss=1; fi
+          done
+          echo '---- 实际收到的文件 ----'; ls -1 artifacts || true
+          [ "$miss" = 0 ] || { echo '::error::产物矩阵不完整，已中止发版'; exit 1; }
+          echo "[OK] 产物矩阵齐全：${#want[@]} 个安装包"
+
+  # ------------------------------------------------------------------- 发版
+  release:
+    name: 创建 Release
+    needs: [setup, verify]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 收集构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: 生成源码包与校验清单
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver='${{ needs.setup.outputs.version }}'
+          mkdir -p dist
+          prefix="thingsmanager-${ver}/"
+          git archive --format=tar.gz --prefix="$prefix" -o "dist/thingsmanager-${ver}-src.tar.gz" HEAD
+          git archive --format=zip    --prefix="$prefix" -o "dist/thingsmanager-${ver}-src.zip"    HEAD
+          cp -f artifacts/* dist/ 2>/dev/null || true
+          ( cd dist && rm -f SHA256SUMS.txt && sha256sum * > SHA256SUMS.txt )
+          echo '--- 本次发布产物 ---'
+          ls -lh dist
+          echo '--- SHA256SUMS.txt ---'
+          cat dist/SHA256SUMS.txt
+
+      # 发布说明同时用于 GitHub Release 与 Gitee Release，末尾附上每个文件的 SHA256 与体积
+      - name: 写发布说明（含各产物 SHA256）
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver='${{ needs.setup.outputs.version }}'
+          # 摘要 = 版本号 + 一句话（写在 RELEASE-NOTE.md 第 1 行；发版前更新它）
+          note="$(head -n 1 RELEASE-NOTE.md 2>/dev/null || true)"
+          [ -n "$note" ] || note='例行更新与问题修复'
+          {
+            printf '**V%s** · %s\n\n' "$ver" "$note"
+            cat <<'EOF'
+          ## 下载与安装
+
+          | 平台 | 文件 | 说明 |
+          | --- | --- | --- |
+          | Windows | `ThingsManager_<版本>_windows_AMD64.exe` / `_windows_ARM64.exe` | 安装版：注册为 Windows 服务 + 托盘常驻，双击桌面图标打开 |
+          | Debian / Ubuntu | `ThingsManager_<版本>_linux_AMD64.deb` / `_linux_ARM64.deb` | `sudo dpkg -i` 安装，systemd 常驻（`systemctl status thingsmanager`） |
+          | RHEL / CentOS / Fedora | `ThingsManager_<版本>_linux_AMD64.rpm` / `_linux_ARM64.rpm` | `sudo rpm -ivh` 安装，systemd 常驻 |
+          | 任意 Linux | `ThingsManager_<版本>_linux_AMD64.AppImage` / `_linux_ARM64.AppImage` | `chmod +x` 后直接运行，数据默认在 `~/.local/share/ThingsManager` |
+          | 源码 | `thingsmanager-<版本>-src.tar.gz` / `.zip` | 需要 Node.js ≥ 22，`npm ci --omit=dev` 后 `node server.js` |
+
+          安装包均已内嵌精简 Node 运行时，**无需另装 Node.js 或数据库**。
+          32 位 x86 不受支持（Node.js 官方已无 32 位二进制，详见 `packaging/README.md` 的「支持矩阵」）。
+
+          ## 许可证
+
+          **代码**：GNU **AGPL-3.0-or-later** —— 可自由使用 / 修改 / 分发（含商用）；分发或把修改版作为
+          网络服务提供时，须以同一许可证公开完整源代码、保留作者署名并注明修改。
+
+          **品牌与素材**（Logo / 赞赏码 / 模板样式 / 文档配图）：**保留所有权利**，未经许可不得用于其它产品、
+          服务或分发物。
+
+          完整条款见仓库 LICENSE 与 NOTICE；商业授权（闭源商用等）请与作者联系。
+          EOF
+          } > release-notes.md
+          sed -i "s/<版本>/${ver}/g" release-notes.md
+          # 追加校验值表格（从 SHA256SUMS.txt 读，排除清单文件自身）
+          {
+            echo ''
+            echo '## 校验值（SHA256）'
+            echo ''
+            echo '| 文件 | 体积 | SHA256 |'
+            echo '| --- | --- | --- |'
+            while read -r sum name; do
+              [ -n "${name:-}" ] || continue
+              name="${name#\*}"   # 去掉 sha256sum 的二进制标记（部分环境会加 *）
+              name="${name#./}"   # 去掉 ./ 前缀，表格里只显示文件名
+              [ "$name" = 'SHA256SUMS.txt' ] && continue
+              printf '| `%s` | %s | `%s` |\n' "$name" "$(du -h "dist/$name" | cut -f1)" "$sum"
+            done < dist/SHA256SUMS.txt
+            echo ''
+            echo '下载后请核对上面的 SHA256：Linux/macOS 用 `sha256sum -c SHA256SUMS.txt`，Windows 用 `certutil -hashfile <文件> SHA256`。'
+          } >> release-notes.md
+          echo '--- release-notes.md ---'
+          cat release-notes.md
+      - name: 创建 / 更新 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.tag }}
+          name: ThingsManager V${{ needs.setup.outputs.version }}
+          prerelease: ${{ needs.setup.outputs.prerelease == 'true' }}
+          # 说明完全由 release-notes.md 控制（开头是“版本号 + 一句话”，下面才是下载表与校验值）；
+          # 不开 GitHub 自动生成的 notes，避免掺入与发行内容无关的自动摘要。
+          # 允许重跑（例如补传 Gitee 附件）：覆盖同名附件、用新说明覆盖旧说明，
+          # 否则重跑会因「附件已存在」失败，或把同一份说明重复追加两遍。
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: dist/*
+          body_path: release-notes.md
+
+      # -------------------------------------------------- 同步到 Gitee Release
+      # Gitee 的「流水线 / Gitee Go」是企业版功能（纯 UI 配置，仓库里放不了构建
+      # 脚本），所以这里统一在 GitHub 上构建，再把产物上传到 Gitee 的 Release，
+      # 让 Gitee 仓库也能直接下载到自动构建的安装包。
+      # 需要配置仓库密钥：GITEE_TOKEN（Gitee 私人令牌，projects 权限）
+      #                    GITEE_REPO （Gitee 的 owner/repo，缺省用本仓库同名）
+      # 未配置 GITEE_TOKEN 时本步骤自动跳过（不会让工作流失败）。
+      # Gitee 只是镜像：即便同步失败（网络成因居多，日志里会打印每个文件的结果与
+      # 失败原因），也不应该把已经发布成功的 GitHub Release 拖成红色，故
+      # continue-on-error。补传办法：重跑本工作流（脚本会复用 Release 并覆盖同名附件）。
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - name: 同步到 Gitee Release
+        continue-on-error: true
+        shell: bash
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REPO: ${{ secrets.GITEE_REPO || github.repository }}
+          GITEE_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          set -euo pipefail
+          node packaging/tools/gitee-release.js "$GITEE_REPO" "${{ needs.setup.outputs.tag }}" dist release-notes.md

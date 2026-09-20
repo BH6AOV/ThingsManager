@@ -1,0 +1,35 @@
+#!/bin/sh
+# =============================================================================
+# ThingsManager · AppImage 入口
+#   · 直接前台运行平台服务（日志打在终端，Ctrl+C 退出）
+#   · 数据目录默认放用户目录，可用 THM_DATA 覆盖；端口默认 3200，可用 THM_PORT 覆盖
+#   · 不设置 THM_DESKTOP，因此设置页「重启平台」采用“自行派生新进程”的方式重启
+# =============================================================================
+set -e
+
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+APPDIR="${APPDIR:-$HERE}"
+APP_DIR="$APPDIR/usr/lib/thingsmanager"
+
+if [ ! -x "$APP_DIR/runtime/bin/node" ]; then
+    echo "[X] AppDir 内容不完整：$APP_DIR" >&2
+    exit 1
+fi
+
+# 数据目录：默认 ~/.local/share/ThingsManager（不污染用户主目录根）
+if [ -z "${THM_DATA:-}" ]; then
+    THM_DATA="$HOME/.local/share/ThingsManager"
+    mkdir -p "$THM_DATA"
+fi
+export THM_DATA
+
+# 端口 / 监听地址（不设则由程序按运行时配置或默认值决定）
+[ -n "${THM_PORT:-}" ] && export THM_PORT
+[ -n "${THM_HOST:-}" ] && export THM_HOST
+
+echo "[.] ThingsManager"
+echo "    数据目录：$THM_DATA"
+echo "    端口：${THM_PORT:-3200（默认）}"
+echo "    访问：http://127.0.0.1:${THM_PORT:-3200}/"
+
+exec "$APP_DIR/runtime/bin/node" "$APP_DIR/app/server.js" "$@"

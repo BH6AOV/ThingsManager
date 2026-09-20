@@ -1,0 +1,11 @@
+#!/bin/sh
+# ThingsManager 命令行入口（服务本体由 systemd 管理）
+#
+#   thingsmanager                      # 前台运行（调试/排查用）
+#   systemctl status  thingsmanager    # 查看服务状态
+#   systemctl restart thingsmanager    # 重启服务
+#   journalctl -u thingsmanager -f     # 实时日志
+#
+export THM_CONFIG="${THM_CONFIG:-/var/lib/thingsmanager/runtime.config.json}"
+export THM_DESKTOP="${THM_DESKTOP:-1}"
+exec /opt/thingsmanager/runtime/bin/node /opt/thingsmanager/app/server.js "$@"

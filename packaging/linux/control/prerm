@@ -1,0 +1,13 @@
+#!/bin/sh
+# ThingsManager 卸载前脚本：先停服务（升级时同样先停，便于替换程序文件）
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl stop thingsmanager >/dev/null 2>&1 || true
+    # 仅在“卸载”（非升级）时取消开机自启
+    if [ "$1" = "remove" ]; then
+        systemctl disable thingsmanager >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0

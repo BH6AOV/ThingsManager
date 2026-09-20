@@ -1,0 +1,45 @@
+[Unit]
+Description=ThingsManager · 轻量仓库管理（服务端）
+Documentation=https://github.com/BH6AOV
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=thingsmanager
+Group=thingsmanager
+WorkingDirectory=/opt/thingsmanager/app
+
+# 可选环境变量（端口 / 监听地址 / 数据目录覆盖）：改完执行 systemctl restart thingsmanager
+EnvironmentFile=-/etc/thingsmanager/thingsmanager.env
+# 运行配置（数据目录、监听）：放在可写的数据目录里，设置页可直接修改
+Environment=THM_CONFIG=/var/lib/thingsmanager/runtime.config.json
+# 让程序按“受管理的服务模式”运行：设置页「重启平台」会交由 systemd 拉起（而不是自己派生新进程）
+Environment=THM_DESKTOP=1
+Environment=NODE_ENV=production
+
+ExecStart=/opt/thingsmanager/runtime/bin/node /opt/thingsmanager/app/server.js
+
+# 常驻：任何退出（含设置页「重启平台」）都由 systemd 立即拉起
+Restart=always
+RestartSec=1
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=thingsmanager
+
+# 轻量加固（不限制其它路径写入，便于在设置页迁移数据目录）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+# 文件句柄（Excel / PDF / 二维码导出并发更高时更稳）
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target
