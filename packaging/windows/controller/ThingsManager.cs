@@ -443,6 +443,48 @@ namespace ThingsManager
             catch { }
         }
 
+        // 停止服务并等待它真正变为 Stopped。
+        // 注意：sc stop 只是“发出停止请求”就返回，服务还处于 StopPending；不等它停完就 Install/Start 必然失败。
+        private static bool StopServiceAndWait(int seconds)
+        {
+            try
+            {
+                using (ServiceController sc = new ServiceController("ThingsManager"))
+                {
+                    if (sc.Status == ServiceControllerStatus.Stopped) return true;
+                    if (sc.Status != ServiceControllerStatus.StopPending) sc.Stop();
+                    sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(seconds));
+                    return sc.Status == ServiceControllerStatus.Stopped;
+                }
+            }
+            catch { return false; }
+        }
+
+        // 启动服务并等待 Running（返回是否真的跑起来了）
+        private static bool StartServiceAndWait(int seconds)
+        {
+            try
+            {
+                using (ServiceController sc = new ServiceController("ThingsManager"))
+                {
+                    if (sc.Status == ServiceControllerStatus.Running) return true;
+                    if (sc.Status == ServiceControllerStatus.StartPending)
+                    {
+                        sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(seconds));
+                        return sc.Status == ServiceControllerStatus.Running;
+                    }
+                    if (sc.Status == ServiceControllerStatus.StopPending)
+                    {
+                        try { sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15)); } catch { }
+                    }
+                    sc.Start();
+                    sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(seconds));
+                    return sc.Status == ServiceControllerStatus.Running;
+                }
+            }
+            catch { return false; }
+        }
+
         private static int InstallService(bool quiet)
         {
             if (!Ops.IsAdmin())
@@ -454,10 +496,25 @@ namespace ThingsManager
             }
             try
             {
-                if (Ops.ServiceExists("ThingsManager"))
+                bool existed = Ops.ServiceExists("ThingsManager");
+                if (existed)
                 {
-                    if (!quiet) Ops.Info("检测到 ThingsManager 服务已存在，将停止并删除后重新安装。");
-                    Ops.Sc("stop ThingsManager");
+                    if (!quiet) Ops.Info("检测到 ThingsManager 服务已存在，将停止并重新注册。");
+                    // 1) 先停下来并等它真的停了（sc stop 是异步的）
+                    StopServiceAndWait(30);
+                    // 2) 服务已存在时必须先卸载，否则 AssemblyInstaller.Install 会抛“服务已存在”导致整个安装静默失败
+                    //    （这一直是“升级安装后服务没起来、要手动重启”的根因）
+                    try
+                    {
+                        using (AssemblyInstaller old = new AssemblyInstaller(Application.ExecutablePath, null))
+                        {
+                            old.UseNewContext = true;
+                            old.Uninstall(null);
+                        }
+                    }
+                    catch { /* 卸载失败不致命：下面重新 Install 会覆盖配置；仍失败则在启动阶段重试 */ }
+                    // 等 SCM 真正把服务删掉（标记删除期间同名服务不能重建）
+                    for (int i = 0; i < 30 && Ops.ServiceExists("ThingsManager"); i++) System.Threading.Thread.Sleep(500);
                 }
                 using (AssemblyInstaller installer = new AssemblyInstaller(Application.ExecutablePath, null))
                 {
@@ -465,12 +522,20 @@ namespace ThingsManager
                     installer.Install(new Hashtable());
                     installer.Commit(new Hashtable());
                 }
-                Ops.Sc("start ThingsManager");
+                // 3) 启动并等待 Running；覆盖安装时 SCM 可能还在收尾，失败就稍等重试一次
+                bool started = StartServiceAndWait(25);
+                if (!started)
+                {
+                    System.Threading.Thread.Sleep(2000);
+                    started = StartServiceAndWait(25);
+                }
                 if (!quiet)
                 {
-                    Ops.Info("ThingsManager 服务安装成功并已启动（监听 0.0.0.0:3200）。\n提示：若端口被占用或启动失败，请以管理员释放该端口后重试。");
+                    Ops.Info(started
+                        ? "ThingsManager 服务安装成功并已启动（监听 0.0.0.0:3200）。\n提示：若端口被占用，请在系统设置里换端口或释放占用后重试。"
+                        : "服务已注册，但本次未能自动启动（可能端口被占用或服务正在收尾）。\n可稍后在托盘图标菜单点「重启服务」，或重启计算机。");
                 }
-                return 0;
+                return started ? 0 : 1;
             }
             catch (Exception ex)
             {

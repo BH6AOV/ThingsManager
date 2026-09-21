@@ -142,7 +142,7 @@ Ok ('内嵌 Node 就绪：{0:N1} MB' -f ((Get-Item $nodeExe).Length / 1MB))
 # ---------- 2) 组装载荷 ----------
 Info '同步 app 代码 → 载荷 ...'
 if (-not (Test-Path $StageApp)) { New-Item -ItemType Directory -Path $StageApp -Force | Out-Null }
-foreach ($f in @('server.js', 'supervisor.js', 'package.json', 'package-lock.json', 'start.bat', 'LICENSE', 'NOTICE')) {
+foreach ($f in @('server.js', 'supervisor.js', 'package.json', 'package-lock.json', 'start.bat', 'LICENSE', 'NOTICE', 'edition.default.json')) {
     $src = Join-Path $Root $f
     if (Test-Path $src) { Copy-Item $src (Join-Path $StageApp $f) -Force }
 }

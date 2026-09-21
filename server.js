@@ -21,7 +21,7 @@ const { spawnSync, spawn } = require('child_process');
 // 版本号（同步落点：package.json / package-lock.json(两处) / dist/windows/build/ThingsManager.iss(MyAppVer+VersionInfoVersion) /
 //  static/index.html(#ver-chip 与 ?v=) / static/app.js(CHANGELOG 首条 + milestone) / docs 两份）；
 // 规则：修订号 +0.0.1 = 修复与小改动；次版本号 +0.1.0 = 一批新功能 / 准备发版；未发版前的后续改动并入同一版本号不重复升位
-const APP_VERSION = '0.10.8';
+const APP_VERSION = '0.10.9';
 
 const ROOT = __dirname;
 // 运行配置（桌面/安装版使用）：存于安装目录 runtime.config.json —— dataDir 等。
@@ -104,6 +104,25 @@ for (const d of [DATA_DIR, TPL_DIR, BRAND_DIR, BACKUP_DIR]) fs.mkdirSync(d, { re
  * ============================================================ */
 const EDITION_FILE = path.join(DATA_DIR, 'edition.json');
 const EDITION_KEYS = ['edition', 'app_name', 'short_name', 'logo', 'mail_footer', 'links', 'about', 'donate', 'hidden_pages', 'update'];
+/* 「默认特化配置」：程序目录可随包携带一份 edition.default.json（各分发形态自带）。
+ * 只在【数据目录】里还没有 edition.json 时用它初始化一份；之后无论装 / 升级哪个版本的包，
+ * 程序文件被替换、数据目录里的 edition.json 都不会再被触碰 —— 即「安装包只更新主程序，不影响特化内容」。
+ * 建议只写各版本之间真正有差异的键（如 donate 赞赏码、logo、update 更新源）；
+ * 没写的键沿用程序内置默认（见 static/app.js 的 EDITION_DEF）；以 _ 开头的键忽略（仅供写说明）。 */
+const EDITION_DEFAULT_FILE = path.join(ROOT, 'edition.default.json');
+function ensureEditionFile() {
+  if (fs.existsSync(EDITION_FILE)) return false;   // 已存在 = 本机特化内容，绝不覆盖
+  try {
+    const src = JSON.parse(fs.readFileSync(EDITION_DEFAULT_FILE, 'utf8'));
+    if (!src || typeof src !== 'object' || Array.isArray(src)) return false;
+    const o = {};
+    for (const k of EDITION_KEYS) if (src[k] !== undefined) o[k] = src[k];
+    if (!Object.keys(o).length) return false;
+    fs.writeFileSync(EDITION_FILE, JSON.stringify(o, null, 2));
+    return true;
+  } catch { return false; }                        // 无此文件 / JSON 非法 / 目录只读：静默沿用内置默认
+}
+const EDITION_INITIALIZED = ensureEditionFile();
 function readEdition() {
   let o = {};
   try { o = JSON.parse(fs.readFileSync(EDITION_FILE, 'utf8')) || {}; } catch { o = {}; }
@@ -123,7 +142,15 @@ function editionUpdate() {
   return { github: pick('github'), gitee: pick('gitee') };
 }
 function editionInfo() {
-  return { file: EDITION_FILE, exists: fs.existsSync(EDITION_FILE), configured: Object.keys(EDITION).length > 0, data: EDITION, update: editionUpdate() };
+  return {
+    file: EDITION_FILE,
+    exists: fs.existsSync(EDITION_FILE),
+    configured: Object.keys(EDITION).length > 0,
+    initialized: EDITION_INITIALIZED,          // 本次启动是否刚由随包默认文件初始化
+    default_file: EDITION_DEFAULT_FILE,        // 随包默认特化配置（升级时会被替换，属程序文件）
+    data: EDITION,
+    update: editionUpdate(),
+  };
 }
 function appTitle() { return String(EDITION.app_name || '轻量仓库管理'); }
 function appShortName() { return String(EDITION.short_name || 'ThingsManager'); }
@@ -3955,6 +3982,22 @@ function renderDocPdfCore(docLike, rows, opt) {
       const fixed = cols.reduce((a, c) => a + c.w, 0);
       cols[cols.length - 1].w = avail - fixed;
       let y2 = y;
+      const CELL_PAD = 3;      // 单元格左右内边距
+      const CELL_TOP = 5;      // 单元格上下内边距
+      const HEAD_H = 20;       // 表头行高（表头文案短，固定即可）
+      const MIN_ROW_H = 20;    // 数据行最小行高
+      // 量出这一行在各自列宽下需要的高度（取各列最大值）—— 写不下就换行，不使用省略号
+      const measureRow = (cells, fontSize) => {
+        dd.font('cjk').fontSize(fontSize);
+        let maxH = 0;
+        cells.forEach((txt, i) => {
+          const s = String(txt == null ? '' : txt);
+          if (!s) return;
+          const h = dd.heightOfString(s, { width: cols[i].w - CELL_PAD * 2, lineBreak: true });
+          if (h > maxH) maxH = h;
+        });
+        return Math.max(MIN_ROW_H, Math.ceil(maxH) + CELL_TOP * 2);
+      };
       const drawRow = (cells, isHead, hgt) => {
         dd.font('cjk').fontSize(isHead ? 9 : 8.5).fillColor(isHead ? '#fff' : '#111');
         if (isHead) dd.rect(ML, y2, avail, hgt).fill('#2f6fed');
@@ -3962,20 +4005,22 @@ function renderDocPdfCore(docLike, rows, opt) {
         let x = ML;
         cells.forEach((txt, i) => {
           const w = cols[i].w;
-          const pad = 3;
           dd.fillColor(isHead ? '#fff' : '#111');
-          dd.text(String(txt == null ? '' : txt), x + pad, y2 + (hgt - 12) / 2, { width: w - pad * 2, lineBreak: false, height: hgt - 6, ellipsis: true });
+          // 单元格内自动换行（lineBreak: true）；不传 height，行高由 measureRow 量好，长内容会自然撑高该行
+          dd.text(String(txt == null ? '' : txt), x + CELL_PAD, y2 + CELL_TOP, { width: w - CELL_PAD * 2, lineBreak: true });
           x += w;
         });
         y2 += hgt;
       };
-      drawRow(cols.map(c => c.h), true, 20);
-      const rowH = 20;
+      drawRow(cols.map(c => c.h), true, HEAD_H);
       let total = 0;
       rows.forEach((r, i) => {
         total += r.qty || 0;
-        if (y2 > PH - 70) { dd.addPage(); y2 = 36; drawRow(cols.map(c => c.h), true, 20); }
-        drawRow([i + 1, r.sku_code, r.name, r.spec || '', r.unit || '', r.qty || '', r.location || '', r.sn || ''], false, rowH);
+        const cells = [i + 1, r.sku_code, r.name, r.spec || '', r.unit || '', r.qty || '', r.location || '', r.sn || ''];
+        const h = measureRow(cells, 8.5);
+        // 先量高度再画：本页放不下就换页，避免跨页被截断
+        if (y2 + h > PH - 70) { dd.addPage(); y2 = 36; drawRow(cols.map(c => c.h), true, HEAD_H); }
+        drawRow(cells, false, h);
       });
       // 合计
       dd.font('cjk').fontSize(9).fillColor('#111');

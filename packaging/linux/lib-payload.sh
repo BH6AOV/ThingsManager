@@ -105,6 +105,8 @@ thm_build_payload() {
     [ -f "$THM_ROOT/LICENSE" ] && cp -a "$THM_ROOT/LICENSE" "$dst/app/"
     [ -f "$THM_ROOT/NOTICE" ]  && cp -a "$THM_ROOT/NOTICE"  "$dst/app/"
     [ -f "$THM_ROOT/start.bat" ] && cp -a "$THM_ROOT/start.bat" "$dst/app/"
+    # 随包携带的默认版本特化配置（仅在数据目录无 edition.json 时用于首次初始化）
+    [ -f "$THM_ROOT/edition.default.json" ] && cp -a "$THM_ROOT/edition.default.json" "$dst/app/"
     cp -a "$THM_ROOT/static" "$THM_ROOT/template" "$dst/app/"
     cp -a "$THM_ROOT/node_modules" "$dst/app/node_modules"
     # 模板预览用的可选原生依赖（xlsx 图片提取）：服务端不需要，且是平台相关二进制，直接剔除

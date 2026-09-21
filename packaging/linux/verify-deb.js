@@ -130,6 +130,7 @@ chk(!!ctrl['conffiles'], 'control 含 conffiles', ctrl['conffiles'] && ctrl['con
 const need = {
     'opt/thingsmanager/app/server.js': 0o644,
     'opt/thingsmanager/app/package.json': 0o644,
+    'opt/thingsmanager/app/edition.default.json': 0o644,
     'opt/thingsmanager/app/static/app.js': 0o644,
     'opt/thingsmanager/app/static/app.css': 0o644,
     'opt/thingsmanager/runtime/bin/node': 0o755,
