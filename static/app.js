@@ -614,6 +614,7 @@ async function renderDashboard(v) {
       html += `<div class="todo-row al-blue">
         <span class="badge orange">新版本</span>
         <div class="grow"><b>V${esc(uv)}</b> <span class="muted">可更新（当前 V${esc(U.current || '')}）</span><div class="muted" style="font-size:12px">来源 ${esc(us)} · 升级包不会动数据与设置</div></div>
+        ${updateDlBtns(U)}
         ${uu ? `<a class="btn sm primary" href="${esc(uu)}" target="_blank" rel="noopener">查看更新 ›</a>` : ''}</div>`;
     }
     if (!html) html = '<div class="empty" style="padding:6px 0"><div class="big">✅</div>暂无待我处理事项（暂存草稿 / 跨库流转待确认会出现在这里）</div>';
@@ -1875,6 +1876,14 @@ async function printDocPdf(id) {
   hide();
   printPdfBlob(blob);
 }
+// 新版本的两个下载入口（GitHub / Gitee 发布页）；首页「待我处理」、关于页、设置页共用
+function updateDlBtns(U) {
+  const d = (U && U.downloads) || {};
+  const out = [];
+  if (d.github) out.push(`<a class="btn sm" href="${esc(d.github)}" target="_blank" rel="noopener" title="到 GitHub 发布页下载（安装版 / 便携版 / Linux 包）">⬇ GitHub 下载</a>`);
+  if (d.gitee) out.push(`<a class="btn sm" href="${esc(d.gitee)}" target="_blank" rel="noopener" title="到 Gitee 发布页下载（国内访问更快）">⬇ Gitee 下载</a>`);
+  return out.join('');
+}
 
 /* ============================================================
  * 导入：扫码(图片) 出入库单 / xlsx 批量入库 / 二维码弹窗
@@ -2921,11 +2930,10 @@ const ABOUT_CFG = {
     started: '2026-09',
     // 累计编写量：按本仓库开发会话记录文本估算（精确计费值取决于所用模型 / 账单，此处按本地记录估算）
     tokensEstimate: '1,181,464,440 tokens',
-    milestone: 'V0.0.0 → V0.10.7',
+    milestone: 'V0.0.0 → V0.10.8',
   },
 };
 // 【替换点】赞赏码列表：每项 { name: '微信…', src: '图片路径' }；留空则显示“预留占位”
-// 开源版只保留微信赞赏码：支付宝那一条由 opensource 的差异规则在同步时移除（见 opensource/DIFFERENCES.md）
 const ABOUT_DONATE = [
   { name: '微信赞赏', src: '/donate/wechatcode.png' },
 ];
@@ -3092,6 +3100,7 @@ function aboutBody(body) {
     <div class="hint" style="margin:10px 0 12px">当前版本 <b class="ver">V${esc(U.current || '')}</b>${U.last_check ? ' · 上次检查 ' + esc(String(U.last_check).slice(0, 16)) : ' · 尚未检查'}${upSrc ? ' · 源：' + esc(upSrc) : ''}${U.last_error ? `<br>上次检查未成功：${esc(U.last_error)}` : ''}</div>
     <div class="row-flex" style="gap:8px;flex-wrap:wrap">
       <button class="btn primary" id="ab-upd">立即检查更新</button>
+      ${U.has_update ? updateDlBtns(U) : ''}
       ${U.has_update && upurl ? `<a class="btn" href="${esc(upurl)}" target="_blank" rel="noopener">查看更新内容 ↗</a>` : ''}
     </div>
   </div></div>` : '';
@@ -3210,6 +3219,7 @@ function generalBody(body, s) {
     <label class="check" style="margin:4px 0 12px;display:block"><input type="checkbox" id="u-auto" ${U.auto ? 'checked' : ''}> 每天自动查询是否有新版本</label>
     <div class="row-flex" style="gap:8px;flex-wrap:wrap">
       <button class="btn primary" id="u-check">立即检查</button>
+      ${U.has_update ? updateDlBtns(U) : ''}
       ${U.has_update && ((U.latest && U.latest.url) || U.latest_url) ? `<a class="btn" href="${esc((U.latest && U.latest.url) || U.latest_url)}" target="_blank" rel="noopener">查看更新内容 ↗</a>` : ''}
     </div>
     ${U.last_error ? `<div class="hint" style="margin-top:8px">上次检查未成功：${esc(U.last_error)}</div>` : ''}
@@ -5139,7 +5149,15 @@ function globalSearchInit() {
  * ============================================================ */
 const CHANGELOG = [
   {
-    ver: '0.10.7', title: '单据 PDF 的存放位置改到明细行 · 出入库表单可直接打印', date: '2026-09',
+    ver: '0.10.8', title: '新增 Windows 便携版（解压即用）· 更新提示带下载入口', date: '2026-09',
+    items: [
+      '<b>新增 Windows 便携版</b>：压缩包解压到任意文件夹，双击 <b>ThingsManager.exe</b> 即启动并自动打开浏览器，<b>不用安装、不需要管理员权限、不写注册表</b>；数据存在程序目录的 data 文件夹，拷走整个文件夹就能换电脑（托盘菜单里有「打开数据目录」与「关闭程序（结束后台并退出）」）',
+      '<b>更新提示新增两个下载入口</b>：发现有新版本时，首页「待我处理」、关于页与设置页都会给出「⬇ GitHub 下载」与「⬇ Gitee 下载」两个按钮，点一下直达对应发布页取安装包',
+      '版本更新检查改为<b>开箱即用</b>：默认就用本项目的 GitHub / Gitee 仓库做更新源（以前需要手动在数据目录的 edition.json 里配置两个源的库链接）',
+    ],
+  },
+  {
+    ver: '0.10.7', title: '单据 PDF 的存放位置改到明细行 · 单据查看页可直接打印', date: '2026-09',
     items: [
       '<b>单据 PDF 里的「存放位置」改到明细行内</b>：以前打印/预览的 PDF 单据把库位放在单据头部（“库位：xxx”），现在改为明细表里新增「存放位置」一列，<b>逐行</b>显示该行的库位（与建单界面、导出表格一致）；单据头部只保留往来单位 / 经办人 / 备注',
       '<b>单据查看页新增「🖨️ 打印」</b>：点单据流水里的单号（或进入「单据详情」）后，可直接点「🖨️ 打印」呼出浏览器打印控件，想打就直接打、想存就另存为 PDF；原来的「导出 PDF」仍在（先在浏览器里阅览，需要时再打印）',

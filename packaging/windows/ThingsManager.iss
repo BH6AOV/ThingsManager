@@ -9,10 +9,10 @@
 #define MyAppName "ThingsManager"
 #define MyPublisher "橙子木"
 #ifndef MyAppVer
-#define MyAppVer "0.10.7"
+#define MyAppVer "0.10.8"
 #endif
 #ifndef VerInfoVersion
-#define VerInfoVersion "0.10.7.0"
+#define VerInfoVersion "0.10.8.0"
 #endif
 #ifndef MyArch
 #define MyArch "x64"
@@ -34,6 +34,11 @@
 #else
 #define OutBase "ThingsManager_" + MyAppVer + "_windows_AMD64"
 #endif
+#endif
+#ifndef LangFile
+; 简体中文语言文件：默认用编译器自带的副本（本机安装 Inno Setup 通常自带中文）。
+; CI 上 choco 安装的 Inno Setup 常缺中文，build.ps1 会下载一份到 .cache 并经 /DLangFile= 覆盖本值。
+#define LangFile "compiler:Languages\ChineseSimplified.isl"
 #endif
 
 [Setup]
@@ -72,7 +77,7 @@ CloseApplications=no
 ; 数据默认放 %ProgramData%\ThingsManager（不随卸载删除，保护数据）
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimp"; MessagesFile: "{#LangFile}"
 
 [Files]
 Source: "{#StageSource}"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

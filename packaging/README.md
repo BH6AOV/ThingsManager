@@ -46,20 +46,29 @@ packaging/
 | 包类型 | AMD64（x64） | ARM64 | X86（32 位） |
 | --- | --- | --- | --- |
 | Windows 安装包 `.exe` | ✅ `-Arch x64` | ✅ `-Arch arm64` | ❌ 不可用 |
+| Windows 便携版 `.zip` | ✅ `-Arch x64 -Portable` | ✅ `-Arch arm64 -Portable` | ❌ 不可用 |
 | Linux `.deb` | ✅ `amd64` | ✅ `arm64` | ❌ 不可用 |
 | Linux `.rpm` | ✅ `amd64` | ✅ `arm64` | ❌ 不可用 |
 | Linux `.AppImage` | ✅ `amd64` | ✅ `arm64` | ❌ 不可用 |
 
-共 **8 个安装包**，产物名统一为 `ThingsManager_<版本>_<系统>_<CPU平台>.<类型>`，例如：
+共 **10 个文件**（8 个安装包 + 2 个 Windows 便携版 zip），产物名统一为
+`ThingsManager_<版本>_<系统>_<CPU平台>.<类型>`（便携版额外带 `_portable` 后缀），例如：
 
 ```
-ThingsManager_0.10.6_windows_AMD64.exe   ThingsManager_0.10.6_windows_ARM64.exe
-ThingsManager_0.10.6_linux_AMD64.deb     ThingsManager_0.10.6_linux_ARM64.deb
-ThingsManager_0.10.6_linux_AMD64.rpm     ThingsManager_0.10.6_linux_ARM64.rpm
-ThingsManager_0.10.6_linux_AMD64.AppImage  ThingsManager_0.10.6_linux_ARM64.AppImage
+ThingsManager_0.10.8_windows_AMD64.exe   ThingsManager_0.10.8_windows_ARM64.exe
+ThingsManager_0.10.8_windows_AMD64_portable.zip   ThingsManager_0.10.8_windows_ARM64_portable.zip
+ThingsManager_0.10.8_linux_AMD64.deb     ThingsManager_0.10.8_linux_ARM64.deb
+ThingsManager_0.10.8_linux_AMD64.rpm     ThingsManager_0.10.8_linux_ARM64.rpm
+ThingsManager_0.10.8_linux_AMD64.AppImage  ThingsManager_0.10.8_linux_ARM64.AppImage
 ```
 
 CI 在发版前会逐个断言这些文件都已产出（矩阵不完整则中止发版）。
+
+> **Windows 便携版（解压即用）**：zip 内是一个 `ThingsManager/` 文件夹，解压后双击 `ThingsManager.exe`
+> 即可启动（内嵌 Node 跑 `app\supervisor.js`，自动打开浏览器）。它**不注册系统服务、不需要管理员权限、
+> 不写注册表**；数据保存在同目录的 `data\`，整个文件夹拷走即可换机。
+> 实现方式：包里多一个 `portable.flag`（控制器据此进入便携模式）与 `app\runtime.config.json`
+> （`dataDir` 指向 `../data`，端口 / 监听可自行修改）；删除 `portable.flag` 就会退回「安装版」行为。
 
 > **为什么没有 32 位 x86？** 安装包内嵌 Node.js 运行时（用户免装 Node），而 Node 官方自 v16 起不再提供
 > 32 位二进制（Windows 最后到 Node 14、Linux 最后到 Node 10），社区构建的 `linux-x86` 最高只到 v21.7.3；
@@ -75,6 +84,10 @@ CI 在发版前会逐个断言这些文件都已产出（矩阵不完整则中�
 powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\build.ps1 -Arch x64
 powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\build.ps1 -Arch arm64
 # 产物：dist\ThingsManager_<版本>_windows_AMD64.exe / _windows_ARM64.exe
+
+# 同时出便携版 zip（在安装包基础上多产一个 zip）：
+powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\build.ps1 -Arch x64 -Portable
+# 产物：dist\ThingsManager_<版本>_windows_AMD64_portable.zip
 ```
 
 **Linux 三件套**（Debian/Ubuntu 上执行，可跨架构构建 arm64）：
@@ -102,7 +115,7 @@ git add -A && git commit -m "Release v0.10.7"
 git tag v0.10.7 && git push origin main --tags      # GitHub
 git push gitee  main --tags                          # Gitee 镜像（可选）
 # 3) CI 自动产出（约 10 分钟）：
-#    Windows 安装包 AMD64/ARM64 · deb/rpm/AppImage AMD64/ARM64 · 源码包 · SHA256SUMS.txt
+#    Windows 安装包 + 便携版 zip AMD64/ARM64 · deb/rpm/AppImage AMD64/ARM64 · 源码包 · SHA256SUMS.txt
 ```
 
 Release 说明由 `RELEASE-NOTE.md` + 产物清单自动生成，首行固定为 `**V<版本>** · <一句话说明>`。
@@ -120,6 +133,12 @@ Gitee 的「流水线 / Gitee Go」是**企业版**功能，且是纯 UI 配置�
 | --- | --- | --- |
 | `GITEE_TOKEN` | Gitee → 个人设置 → 私人令牌（勾选 `projects` 权限） | 未配置则自动跳过该步骤，不影响其它环节 |
 | `GITEE_REPO` | 例如 `BH6AOV/ThingsManager` | 可选；缺省用当前 GitHub 仓库的 `owner/repo` |
+
+> **同步前会先清空 Gitee 上已有的 Release。** Gitee 的仓库附件总配额只有 **1 GB**（单附件 100 MB），
+> 而一套产物约 500 MB；历史版本的 Release 留在那里会把配额占满，新版本上传到一半就会报
+> 「验证失败：文件大小已超出仓库附件配额：1 GB」。因此脚本在创建/上传之前，会先列出并删除 Gitee 上
+> **全部** Release 再重新来（**删除 Release 不会删除 git 标签**，`v*` tag 仍保留在仓库里）。
+> 确实需要保留历史 Release 时，设 `GITEE_NO_PURGE=1` 跳过这一步（此时只清理同一 tag 下的同名附件）。
 
 也可以在本机手动把已构建好的产物推到 Gitee（无需在 CI 里配令牌）：
 

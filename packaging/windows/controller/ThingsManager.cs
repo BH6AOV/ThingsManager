@@ -49,6 +49,11 @@ namespace ThingsManager
         public static string Supervisor { get { return Path.Combine(AppDir, "supervisor.js"); } }
         public static string CfgFile { get { return Path.Combine(AppDir, "runtime.config.json"); } }
 
+        // 便携版标志：程序目录下存在 portable.flag 时以「便携模式」运行
+        // （不注册系统服务；数据目录与端口由 app\runtime.config.json 指定，便携包内为程序目录下的 data\）
+        public static string PortableFlag { get { return Path.Combine(ExeDir, "portable.flag"); } }
+        public static bool Portable { get { try { return File.Exists(PortableFlag); } catch { return false; } } }
+
         public static int ReadPort()
         {
             int port = 0;
@@ -239,6 +244,8 @@ namespace ThingsManager
                 // 桌面 / 开始菜单快捷方式或直接双击（默认，等价 --open）= 确保后台服务在运行，并自动打开 http://<本机IP>:<端口>
                 bool openMode = true;
                 if (args != null && args.Length > 0 && args[0].ToLowerInvariant() == "--tray") openMode = false;
+                // 便携版（存在 portable.flag）：不碰系统服务，直接用本目录内嵌 node 运行 app\supervisor.js
+                if (Paths.Portable) return AppMain.RunPortable(openMode);
                 return AppMain.RunInteractive(openMode);
             }
 
@@ -264,6 +271,111 @@ namespace ThingsManager
                 Application.Run(new ThmTray());
             }
             return 0;
+        }
+
+        /* ---------------------------------------------------------------- 便携模式
+         * 解压即用：不注册服务、不写注册表，直接用包内 runtime\node.exe 运行 app\supervisor.js；
+         * 数据目录 / 端口来自 app\runtime.config.json（便携包内 dataDir 指向程序目录下的 data\）。
+         * 双击 exe = 启动后台 + 打开浏览器 + 驻留托盘；托盘「关闭程序」会结束后台进程。
+         * ---------------------------------------------------------------------------- */
+        private static Process _portableNode;
+
+        private static int RunPortable(bool openMode)
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            int port = Paths.ReadPort();
+            // 端口已在监听说明本目录的程序已在运行（或与安装版同端口）：不再重复拉起
+            if (!ThmTray.PortUp(port)) AppMain.StartPortableNode();
+            if (openMode) ThmTray.OpenPanel();
+            bool createdNew;
+            using (System.Threading.Mutex trayMutex = new System.Threading.Mutex(true, "ThingsManager_Tray", out createdNew))
+            {
+                if (!createdNew) return 0;   // 已有托盘实例在运行（本次只启动了后台 / 打开了面板）
+                Application.Run(new ThmTray(true));
+            }
+            return 0;
+        }
+
+        // 便携版日志：<程序目录>\logs\server.log（启动时若超过 2MB 先清空，避免无限增长）
+        private static readonly object _logLock = new object();
+        private static string _logFile;
+
+        private static void AppendLog(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return;
+            try
+            {
+                if (_logFile == null)
+                {
+                    _logFile = Path.Combine(Paths.ExeDir, "logs", "server.log");
+                    Directory.CreateDirectory(Path.GetDirectoryName(_logFile));
+                    FileInfo fi = new FileInfo(_logFile);
+                    if (fi.Exists && fi.Length > 2 * 1024 * 1024) fi.Delete();
+                }
+                lock (_logLock)
+                {
+                    File.AppendAllText(_logFile, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss  ") + line + Environment.NewLine, System.Text.Encoding.UTF8);
+                }
+            }
+            catch { }
+        }
+
+        // 用内嵌 node 启动 app\supervisor.js（由 supervisor 守护 server.js，异常退出自动拉起）
+        internal static bool StartPortableNode()
+        {
+            try
+            {
+                if (!File.Exists(Paths.NodeExe))
+                {
+                    Ops.Info("未找到内嵌运行环境：\n" + Paths.NodeExe + "\n\n请把压缩包完整解压到本地文件夹后再双击运行（不要在压缩包内直接打开）。");
+                    return false;
+                }
+                if (!File.Exists(Paths.Supervisor))
+                {
+                    Ops.Info("未找到程序入口：\n" + Paths.Supervisor);
+                    return false;
+                }
+                ProcessStartInfo psi = new ProcessStartInfo(Paths.NodeExe, "\"" + Paths.Supervisor + "\"");
+                psi.WorkingDirectory = Paths.AppDir;
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                // 必须重定向输出：本程序是 GUI 子系统（winexe）没有控制台，若让子进程继承无效的标准句柄，
+                // node 第一次 console.log 就会因写入失败而退出；顺便把日志落到 logs\server.log 便于排错。
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                // 子进程输出是 UTF-8，而 .NET 默认按系统 ANSI（中文系统=GBK）解码 → 日志会乱码，这里显式指定
+                psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+                _portableNode = Process.Start(psi);
+                if (_portableNode == null) return false;
+                _portableNode.OutputDataReceived += delegate(object s, DataReceivedEventArgs e) { AppMain.AppendLog(e.Data); };
+                _portableNode.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e) { AppMain.AppendLog("[stderr] " + e.Data); };
+                _portableNode.BeginOutputReadLine();
+                _portableNode.BeginErrorReadLine();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Ops.Info("启动失败：" + ex.Message);
+                return false;
+            }
+        }
+
+        // 关闭便携版：结束内嵌 node 及其子进程（supervisor → server），不触碰系统服务
+        internal static void StopPortableNode()
+        {
+            try
+            {
+                if (_portableNode != null && !_portableNode.HasExited)
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo("taskkill", "/PID " + _portableNode.Id + " /T /F");
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    using (Process p = Process.Start(psi)) { if (p != null) p.WaitForExit(8000); }
+                }
+            }
+            catch { }
         }
 
         // 确保 ThingsManager 后台服务处于运行状态；服务未启动且非管理员时自动提权拉起
@@ -432,29 +544,55 @@ namespace ThingsManager
         private NotifyIcon _icon;
         private ContextMenuStrip _menu;
         private ToolStripMenuItem _miAutostart;
+        private readonly bool _portable;
 
-        public ThmTray()
+        public ThmTray() : this(false) { }
+
+        public ThmTray(bool portable)
         {
+            _portable = portable;
             _icon = new NotifyIcon();
             _icon.Icon = ThmTray.LoadTrayIcon();
             _icon.Visible = true;
 
             _menu = new ContextMenuStrip();
-            _miAutostart = new ToolStripMenuItem("开机自启（服务）", null, OnAutostartClick);
             _menu.Items.Add("打开面板", null, OnOpenClick);
-            _menu.Items.Add("重启服务", null, OnRestartClick);
-            _menu.Items.Add(_miAutostart);
+            if (_portable)
+            {
+                // 便携版：没有系统服务，「开机自启 / 重启服务」不适用，改用「打开数据目录」
+                _menu.Items.Add("打开数据目录", null, OnOpenDataClick);
+            }
+            else
+            {
+                _miAutostart = new ToolStripMenuItem("开机自启（服务）", null, OnAutostartClick);
+                _menu.Items.Add("重启服务", null, OnRestartClick);
+                _menu.Items.Add(_miAutostart);
+            }
             _menu.Items.Add(new ToolStripSeparator());
-            _menu.Items.Add("关闭程序（停止服务并退出）", null, OnExitClick);
+            _menu.Items.Add(_portable ? "关闭程序（结束后台并退出）" : "关闭程序（停止服务并退出）", null, OnExitClick);
             _icon.ContextMenuStrip = _menu;
             _icon.DoubleClick += OnOpenClick;
             // 单击托盘小按钮即弹出菜单（用户反馈原需右键不便）
             _icon.MouseUp += delegate(object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) _menu.Show(Cursor.Position); };
             RefreshState();
             // 首次出现提示：图标默认在托盘区；若被折叠请点任务栏“^”展开
-            _icon.BalloonTipTitle = "ThingsManager · 托盘守护";
-            _icon.BalloonTipText = "已在系统托盘运行（打开面板 / 重启 / 开机自启 / 关闭程序）。\n若看不到图标，请点击任务栏“^”展开隐藏图标。";
+            _icon.BalloonTipTitle = _portable ? "ThingsManager · 便携版" : "ThingsManager · 托盘守护";
+            _icon.BalloonTipText = _portable
+                ? "已在本机运行（打开面板 / 打开数据目录 / 关闭程序）。\n数据保存在程序目录的 data 文件夹，拷走整个文件夹即可搬机。\n若看不到图标，请点击任务栏“^”展开隐藏图标。"
+                : "已在系统托盘运行（打开面板 / 重启 / 开机自启 / 关闭程序）。\n若看不到图标，请点击任务栏“^”展开隐藏图标。";
             _icon.ShowBalloonTip(2000);
+        }
+
+        // 便携版：在资源管理器中打开数据目录（程序目录下的 data）
+        private void OnOpenDataClick(object sender, EventArgs e)
+        {
+            try
+            {
+                string dir = Path.Combine(Paths.ExeDir, "data");
+                Directory.CreateDirectory(dir);
+                Process.Start("explorer.exe", "\"" + dir + "\"");
+            }
+            catch { }
         }
 
         // 托盘图标：优先使用与程序同目录的 logo.ico（默认全局 Logo），缺失时退回系统图标
@@ -551,6 +689,12 @@ namespace ThingsManager
             return false;
         }
 
+        // 端口是否已在监听（便携模式用它判断“本目录的程序是否已在运行”）
+        public static bool PortUp(int port)
+        {
+            return ThmTray.CanConnect("127.0.0.1", port, 500);
+        }
+
         private bool IsRunning()
         {
             try
@@ -567,6 +711,12 @@ namespace ThingsManager
         {
             try
             {
+                if (_portable)
+                {
+                    int p = Paths.ReadPort();
+                    _icon.Text = "ThingsManager（便携版） · " + (ThmTray.PortUp(p) ? "运行中" : "未运行") + " · :" + p;
+                    return;
+                }
                 bool svc = Ops.ServiceExists("ThingsManager");
                 _miAutostart.Enabled = svc;
                 _miAutostart.Checked = svc && Ops.ServiceStartTypeAuto();
@@ -578,8 +728,16 @@ namespace ThingsManager
 
         private void OnOpenClick(object sender, EventArgs e)
         {
-            // 先确保服务在运行（未启动则提权拉起），再打开面板
-            AppMain.EnsureServiceRunning();
+            // 先确保后台在运行（便携版=拉起内嵌 node；安装版=确保服务在跑），再打开面板
+            if (_portable)
+            {
+                int p = Paths.ReadPort();
+                if (!ThmTray.PortUp(p)) AppMain.StartPortableNode();
+            }
+            else
+            {
+                AppMain.EnsureServiceRunning();
+            }
             ThmTray.OpenPanel();
             RefreshState();
         }
@@ -613,10 +771,16 @@ namespace ThingsManager
 
         private void OnExitClick(object sender, EventArgs e)
         {
-            // “关闭程序”：先确认，再一并停止 ThingsManager 后台服务（需管理员时自动提权），避免“退托盘后程序仍在后台运行”
-            if (MessageBox.Show("确定要关闭 ThingsManager 吗？\n\n将一并停止后台服务并退出托盘（网页将无法访问）。",
-                "ThingsManager", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
-            if (Ops.IsAdmin())
+            // “关闭程序”：先确认，再一并停掉后台（安装版=停服务；便携版=结束内嵌进程），避免“退托盘后程序仍在后台运行”
+            string msg = _portable
+                ? "确定要关闭 ThingsManager 吗？\n\n将结束后台进程并退出托盘（网页将无法访问）。数据仍保存在程序目录的 data 文件夹里。"
+                : "确定要关闭 ThingsManager 吗？\n\n将一并停止后台服务并退出托盘（网页将无法访问）。";
+            if (MessageBox.Show(msg, "ThingsManager", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+            if (_portable)
+            {
+                AppMain.StopPortableNode();
+            }
+            else if (Ops.IsAdmin())
             {
                 AppMain.StopServiceOnly();
             }

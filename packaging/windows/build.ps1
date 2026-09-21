@@ -9,11 +9,12 @@
   可选参数：
       -Version <x.y.z>   指定版本号（默认读 package.json）
       -OutDir  <目录>    产物输出目录（默认 <仓库根>\dist）
+      -Portable          额外产出便携版 zip（解压后双击 exe 即用，不装服务）
       -SkipISCC          只准备载荷，不编安装包（调试用）
       -ShowPlan          只打印将执行的动作并退出
 
-  产物：<OutDir>\ThingsManager_<版本>_windows_<CPU平台>.exe（如 ThingsManager_0.10.6_windows_AMD64.exe；
-        命名规范见 packaging/README.md「支持矩阵」）
+  产物：<OutDir>\ThingsManager_<版本>_windows_<CPU平台>.exe（安装版；命名规范见 packaging/README.md「支持矩阵」）
+        <OutDir>\ThingsManager_<版本>_windows_<CPU平台>_portable.zip（-Portable 时；便携版）
 
   步骤：
       1) 内嵌 Node 运行时：下载官方单文件 node.exe（带缓存 .cache\），放进 stage-<arch>\runtime
@@ -29,6 +30,7 @@ param(
     [ValidateSet('x64', 'arm64', 'x86')][string]$Arch = 'x64',
     [string]$Version = '',
     [string]$OutDir = '',
+    [switch]$Portable,
     [switch]$SkipISCC,
     [switch]$ShowPlan
 )
@@ -90,7 +92,8 @@ if ($ShowPlan) {
     Write-Host ' 2) 同步 app 代码与 node_modules 到载荷（剔除 @napi-rs）'
     Write-Host ' 3) 用系统自带 csc 编译托盘/服务控制器 ThingsManager.exe'
     if (-not $SkipISCC) { Write-Host (' 4) ISCC 编译 ' + $OutBase + '.exe') }
-    Write-Host ' 5) 打印产物校验（大小 / SHA256）'
+    if ($Portable) { Write-Host (' 5) 组装便携版并打包 ' + $OutBase + '_portable.zip') }
+    Write-Host ' 6) 打印产物校验（大小 / SHA256）'
     exit 0
 }
 
@@ -231,7 +234,56 @@ if (-not $SkipISCC) {
     if (-not (Test-Path $OutSetup)) { Fail ('编译后未找到：' + $OutSetup) }
 }
 
-# ---------- 5) 产物校验 ----------
+# ---------- 5) 便携版（可选）：解压即用 zip ----------
+# 便携版 = 安装版载荷 + portable.flag（让控制器走便携分支）+ app\runtime.config.json（数据放本目录 data\）
+# 双击 ThingsManager.exe 即启动（内嵌 node 跑 app\supervisor.js）并自动打开浏览器，不注册服务、不写注册表。
+$OutZip = Join-Path $OutDir ($OutBase + '_portable.zip')
+if ($Portable) {
+    Info '组装便携版并打包 zip ...'
+    if (-not (Test-Path (Join-Path $Stage 'ThingsManager.exe'))) { Fail '便携版需要先编译控制器（请去掉 -SkipISCC）' }
+    $PWork = Join-Path $OutDir ('.portable-' + $Arch)
+    $PRoot = Join-Path $PWork 'ThingsManager'          # zip 内的顶层文件夹（解压后就是一个目录）
+    if (Test-Path $PWork) { Remove-Item $PWork -Recurse -Force }
+    New-Item -ItemType Directory -Path $PRoot -Force | Out-Null
+    Copy-Item (Join-Path $Stage '*') $PRoot -Recurse -Force
+
+    # 便携标志（控制器靠它进入便携模式）
+    $flagText = "这个文件表示当前目录是 ThingsManager 便携版（免安装）。`r`n删除它之后，本程序会按「安装版」的方式运行（找系统服务）。`r`n"
+    [IO.File]::WriteAllText((Join-Path $PRoot 'portable.flag'), $flagText, (New-Object Text.UTF8Encoding($true)))
+
+    # 运行配置：数据目录 = 程序目录下的 data\（相对 app 目录写作 ..\data）；端口 / 监听可自行修改
+    $cfg = @{ dataDir = '../data'; port = 3200; host = '0.0.0.0' } | ConvertTo-Json
+    [IO.File]::WriteAllText((Join-Path $PRoot 'app\runtime.config.json'), $cfg, (New-Object Text.UTF8Encoding($false)))
+
+    # 空数据目录（首次运行自动建库与模板）
+    New-Item -ItemType Directory -Path (Join-Path $PRoot 'data') -Force | Out-Null
+
+    $readme = @"
+ThingsManager 便携版（免安装）V$Version
+=========================================
+
+1. 双击 ThingsManager.exe 启动，浏览器会自动打开管理面板（默认 http://127.0.0.1:3200）。
+2. 关闭：右下角托盘图标（可能在“^”折叠区里）→「关闭程序」。
+3. 数据存在本目录的 data 文件夹：备份或换电脑，拷走整个文件夹即可。
+4. 请把整个文件夹解压到本地固定目录再运行（不要在压缩包里直接双击，也不要放在临时目录）。
+5. 局域网访问：同网络设备打开 http://本机IP:3200（首次可能需在防火墙提示里允许）。
+6. 端口被占用时：编辑 app\runtime.config.json 里的 port 换一个，重启程序生效。
+7. 首次打开后建议：系统设置 → 账号与登录 里初始化管理员（默认开放模式，任何人都能改数据）。
+
+LICENSE / NOTICE 见 app 文件夹；本项目代码采用 AGPL-3.0-or-later。
+"@
+    [IO.File]::WriteAllText((Join-Path $PRoot '使用说明.txt'), $readme, (New-Object Text.UTF8Encoding($true)))
+
+    if (Test-Path $OutZip) { Remove-Item $OutZip -Force }
+    # 用 Windows 自带的 tar（bsdtar）打包：node_modules 文件多，比 Compress-Archive 快很多
+    & tar -a -c -f $OutZip -C $PWork 'ThingsManager'
+    if ($LASTEXITCODE -ne 0) { Fail ('便携版 zip 打包失败（exit=' + $LASTEXITCODE + '）') }
+    Remove-Item $PWork -Recurse -Force
+    if (-not (Test-Path $OutZip)) { Fail ('便携版 zip 未生成：' + $OutZip) }
+    Ok ('便携版就绪：{0} （{1:N2} MB）' -f (Split-Path -Leaf $OutZip), ((Get-Item $OutZip).Length / 1MB))
+}
+
+# ---------- 6) 产物校验 ----------
 Write-Host ''
 Write-Host '=============================================================='
 Ok '构建完成'
@@ -243,5 +295,12 @@ if (Test-Path $OutSetup) {
     Write-Host ('  产品版本: ' + $vi.ProductVersion + '   文件版本: ' + $vi.FileVersion)
     Write-Host ('  SHA256  : ' + $h.Hash)
     Write-Host ('  适用    : ' + $Arch + '（Windows 10/11）')
+}
+if ($Portable -and (Test-Path $OutZip)) {
+    $hz = Get-FileHash $OutZip -Algorithm SHA256
+    Write-Host ('  便携版  : ' + $OutZip)
+    Write-Host ('  大小    : {0:N2} MB' -f ((Get-Item $OutZip).Length / 1MB))
+    Write-Host ('  SHA256  : ' + $hz.Hash)
+    Write-Host ('  用法    : 解压后双击 ThingsManager.exe（免安装，数据在本目录 data\）')
 }
 Write-Host '=============================================================='

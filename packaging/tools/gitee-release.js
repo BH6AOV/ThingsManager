@@ -19,7 +19,12 @@
  *   - 令牌：Gitee → 个人设置 → 私人令牌，勾选 `projects` 权限即可。
  *   - 未提供 GITEE_TOKEN 时**不报错**，只打印提示后退出（0），
  *     这样未配置该密钥的仓库跑 CI 不会失败。
- *   - Release 已存在则复用并更新说明；附件同名会先删旧再上传，可重复运行。
+ *   - 同步前会**先清空 Gitee 上已有的全部 Release**（不只是同一个 tag）：
+ *     Gitee 的仓库附件总配额只有 1 GB（单附件 100 MB），而一套产物就 ~500 MB，
+ *     历史版本留着会把配额占满，新版本传到一半就报「文件大小已超出仓库附件配额」。
+ *     删除 Release **不会**删除对应的 git 标签（tag 仍保留在仓库里）。
+ *     如需保留历史 Release，设 `GITEE_NO_PURGE=1`。
+ *   - 同一 Release 内附件同名会先删旧再上传，可重复运行。
  *   - 用 GITEE_API 环境变量可指向其它兼容接口（默认 https://gitee.com/api/v5）。
  */
 'use strict';
@@ -52,7 +57,14 @@ async function api(pathname, { method = 'GET', json, form } = {}) {
     const opt = { method, headers: { accept: 'application/json' } };
     if (form) opt.body = form;
     else if (json) { opt.headers['content-type'] = 'application/json;charset=UTF-8'; opt.body = JSON.stringify(json); }
-    const res = await fetch(API + pathname, opt);
+    let res;
+    try {
+        res = await fetch(API + pathname, opt);
+    } catch (e) {
+        // 网络层异常（DNS 解析失败 / 连接被拒 / 超时，表现为 "fetch failed"）：
+        // 统一转成失败结果返回，由调用方决定跳过还是终止 —— 避免一次网络抖动把整个同步打断
+        return { ok: false, status: 0, data: { error: causeText(e) } };
+    }
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 300) }; }
     return { ok: res.ok, status: res.status, data };
@@ -102,6 +114,43 @@ function causeText(e) {
 
 (async () => {
     console.log('Gitee 发布：仓库=' + repoSlug + '  标签=' + tag + '  产物目录=' + DIR);
+
+    // 0) 先清空 Gitee 上已有的 Release（含历史版本）
+    // 为什么：Gitee 仓库附件总配额 1 GB（单附件 100 MB），而一套产物约 500 MB；
+    //   历史版本留着会挤占配额，新版本上传到一半就会报
+    //   「验证失败：文件大小已超出仓库附件配额：1 GB」。
+    //   注意：删除 Release 不会删除 git 标签，tag 仍留在仓库中。
+    //   要保留历史 Release 时设 GITEE_NO_PURGE=1。
+    const noPurge = /^(1|true|yes)$/i.test(String(process.env.GITEE_NO_PURGE || ''));
+    if (noPurge) {
+        console.log('[i] GITEE_NO_PURGE 已开启：保留 Gitee 上已有的 Release（只清同 tag 的同名附件）');
+    } else {
+        const all = [];
+        let listErr = '';
+        for (let page = 1; page <= 20; page++) {
+            const r = await api(`/repos/${repoSlug}/releases?per_page=100&page=${page}&${tok()}`);
+            if (!r.ok) {
+                listErr = 'HTTP ' + r.status + ' ' + short(r.data);
+                console.log('[!] 读取 Gitee Release 列表失败（跳过清理，继续后续步骤）：' + listErr);
+                break;
+            }
+            const arr = Array.isArray(r.data) ? r.data : [];
+            all.push(...arr);
+            if (arr.length < 100) break;
+        }
+        if (listErr) {
+            // 列表没读到，无从判断是否还有旧 Release（上方已提示），这里不再给出"暂无"这类误导性结论
+        } else if (!all.length) {
+            console.log('[.] Gitee 上暂无 Release，无需清理');
+        } else {
+            console.log(`[.] 清理 Gitee 上已有的 ${all.length} 个 Release（历史版本会挤占 1 GB 配额）…`);
+            for (const r of all) {
+                const d = await api(`/repos/${repoSlug}/releases/${r.id}?${tok()}`, { method: 'DELETE' });
+                if (d.ok) console.log(`[OK] 已删除 Release ${r.tag_name || r.id}（对应 git 标签保留）`);
+                else console.log(`[!] 删除 Release ${r.tag_name || r.id} 失败：HTTP ${d.status} ${short(d.data)}`);
+            }
+        }
+    }
 
     // 1) 复用已有 Release（同一 tag），否则创建
     let rel = (await api(`/repos/${repoSlug}/releases/tags/${encodeURIComponent(tag)}?${tok()}`)).data;

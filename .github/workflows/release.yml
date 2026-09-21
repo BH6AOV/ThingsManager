@@ -135,9 +135,9 @@ jobs:
         run: npm ci --omit=dev
       - name: 安装 Inno Setup
         run: choco install innosetup -y --no-progress
-      - name: 构建安装包
+      - name: 构建安装包与便携版
         shell: pwsh
-        run: ./packaging/windows/build.ps1 -Arch ${{ matrix.arch }} -Version ${{ needs.setup.outputs.version }} -OutDir dist
+        run: ./packaging/windows/build.ps1 -Arch ${{ matrix.arch }} -Version ${{ needs.setup.outputs.version }} -OutDir dist -Portable
       - name: 校验产物命名
         shell: pwsh
         run: |
@@ -148,6 +148,12 @@ jobs:
           $mb = [math]::Round((Get-Item $f).Length / 1MB, 2)
           if ($mb -lt 10) { throw "产物体积异常：$f（$mb MB）" }
           Write-Host "产物就绪：$f（$mb MB）"
+          # 便携版 zip：解压后双击 exe 即用
+          $z = "dist/ThingsManager_${{ needs.setup.outputs.version }}_windows_${cpu}_portable.zip"
+          if (-not (Test-Path $z)) { throw "缺少便携版产物 $z" }
+          $zmb = [math]::Round((Get-Item $z).Length / 1MB, 2)
+          if ($zmb -lt 10) { throw "便携版体积异常：$z（$zmb MB）" }
+          Write-Host "便携版就绪：$z（$zmb MB）"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.arch }}
@@ -173,6 +179,7 @@ jobs:
           want=()
           for cpu in AMD64 ARM64; do
             want+=("ThingsManager_${ver}_windows_${cpu}.exe")
+            want+=("ThingsManager_${ver}_windows_${cpu}_portable.zip")
             for ext in deb rpm AppImage; do
               want+=("ThingsManager_${ver}_linux_${cpu}.${ext}")
             done
@@ -184,7 +191,7 @@ jobs:
           done
           echo '---- 实际收到的文件 ----'; ls -1 artifacts || true
           [ "$miss" = 0 ] || { echo '::error::产物矩阵不完整，已中止发版'; exit 1; }
-          echo "[OK] 产物矩阵齐全：${#want[@]} 个安装包"
+          echo "[OK] 产物矩阵齐全：共 ${#want[@]} 个文件"
 
   # ------------------------------------------------------------------- 发版
   release:
@@ -234,6 +241,7 @@ jobs:
           | 平台 | 文件 | 说明 |
           | --- | --- | --- |
           | Windows | `ThingsManager_<版本>_windows_AMD64.exe` / `_windows_ARM64.exe` | 安装版：注册为 Windows 服务 + 托盘常驻，双击桌面图标打开 |
+          | Windows 便携版 | `ThingsManager_<版本>_windows_AMD64_portable.zip` / `_windows_ARM64_portable.zip` | **解压即用**：解压后双击 `ThingsManager.exe`（不用安装、不需要管理员权限），数据就在解压出来的 `data\` 里，拷走文件夹即可搬机 |
           | Debian / Ubuntu | `ThingsManager_<版本>_linux_AMD64.deb` / `_linux_ARM64.deb` | `sudo dpkg -i` 安装，systemd 常驻（`systemctl status thingsmanager`） |
           | RHEL / CentOS / Fedora | `ThingsManager_<版本>_linux_AMD64.rpm` / `_linux_ARM64.rpm` | `sudo rpm -ivh` 安装，systemd 常驻 |
           | 任意 Linux | `ThingsManager_<版本>_linux_AMD64.AppImage` / `_linux_ARM64.AppImage` | `chmod +x` 后直接运行，数据默认在 `~/.local/share/ThingsManager` |

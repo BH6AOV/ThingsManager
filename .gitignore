@@ -7,10 +7,7 @@ release-notes.md
 *.log
 .DS_Store
 
-# 内部工作流文件：仅本地保留，不随仓库发布
-#   sync.ps1        代码 / 打包源的单向同步脚本（维护者工具）
-#   overrides/      开源版差异文件的来源目录（同步时会应用到仓库根，结果已在仓库里）
-#   DIFFERENCES.md  根目录版 ↔ 开源版 的差异记录表（含内部版信息，不对外）
+# 本地开发工具与记录（不入库）
 sync.ps1
 overrides/
 DIFFERENCES.md

@@ -21,7 +21,7 @@ const { spawnSync, spawn } = require('child_process');
 // 版本号（同步落点：package.json / package-lock.json(两处) / dist/windows/build/ThingsManager.iss(MyAppVer+VersionInfoVersion) /
 //  static/index.html(#ver-chip 与 ?v=) / static/app.js(CHANGELOG 首条 + milestone) / docs 两份）；
 // 规则：修订号 +0.0.1 = 修复与小改动；次版本号 +0.1.0 = 一批新功能 / 准备发版；未发版前的后续改动并入同一版本号不重复升位
-const APP_VERSION = '0.10.7';
+const APP_VERSION = '0.10.8';
 
 const ROOT = __dirname;
 // 运行配置（桌面/安装版使用）：存于安装目录 runtime.config.json —— dataDir 等。
@@ -114,9 +114,13 @@ function readEdition() {
 let EDITION = readEdition();
 // "owner/repo" 归一化：允许直接填完整链接或带 .git 后缀
 function repoSlug(v) { return String(v || '').trim().replace(/^https?:\/\/(www\.)?/i, '').replace(/^(github|gitee)\.com\//i, '').replace(/\.git$/i, '').replace(/^\/+|\/+$/g, ''); }
+// 内置默认更新源：未在 edition.json 里写 update 时用它（开箱就能检查新版本）。
+// 需要禁用某个源（例如内网专版），在 edition.json 里写 update:{github:"",gitee:""} 即可（显式置空优先生效）。
+const UPDATE_DEF = { github: 'BH6AOV/ThingsManager', gitee: 'BH6AOV/ThingsManager' };
 function editionUpdate() {
   const u = (EDITION.update && typeof EDITION.update === 'object') ? EDITION.update : {};
-  return { github: repoSlug(u.github), gitee: repoSlug(u.gitee) };
+  const pick = k => (u[k] !== undefined ? repoSlug(u[k]) : UPDATE_DEF[k]);
+  return { github: pick('github'), gitee: pick('gitee') };
 }
 function editionInfo() {
   return { file: EDITION_FILE, exists: fs.existsSync(EDITION_FILE), configured: Object.keys(EDITION).length > 0, data: EDITION, update: editionUpdate() };
@@ -1404,7 +1408,7 @@ app.get('/api/auth/dingtalk', wrap((req, res) => {
     agent_id: getSetting('dingtalk_agent_id', ''), callback: getSetting('dingtalk_callback', ''),
     provision: getSetting('dingtalk_provision', '0') === '1',
     role: ['admin', 'user', 'viewer'].includes(role) ? role : 'user',
-    callback_path: '/api/auth/dingtalk/callback', doc: 'docs/钉钉登录对接（预备）.md',
+    callback_path: '/api/auth/dingtalk/callback', doc: 'docs/钉钉登录对接（预备文档）.md',
   });
 }));
 app.post('/api/auth/dingtalk', wrap((req, res) => {
@@ -1428,7 +1432,7 @@ app.get('/api/auth/dingtalk/status', wrap((req, res) => ok(res, {
 // 钉钉登录回调（预留占位；实现前一律返回明确的未实现提示）
 function dtCallback(req, res) {
   if (!devEnabled('dingtalk')) { res.status(403).json({ ok: false, error: '钉钉登录未启用（系统设置 → 开发者选项 → 钉钉登录）' }); return; }
-  res.status(501).json({ ok: false, reserved: true, error: '预留接口：钉钉登录回调尚未实现（见 docs/钉钉登录对接（预备）.md）' });
+  res.status(501).json({ ok: false, reserved: true, error: '预留接口：钉钉登录回调尚未实现（见 docs/钉钉登录对接（预备文档）.md）' });
 }
 app.get('/api/auth/dingtalk/callback', wrap(dtCallback));
 app.post('/api/auth/dingtalk/callback', wrap(dtCallback));
@@ -2609,7 +2613,7 @@ const DEV_FEATURES = [
   {
     key: 'dingtalk',
     label: '钉钉对接验证（预留）',
-    desc: '预留开关（默认关闭）：开启后才允许钉钉登录回调（GET/POST /api/auth/dingtalk/callback）与后续钉钉身份验证；关闭时回调返回 403。配置与能力探测（/api/auth/dingtalk、/api/auth/dingtalk/status）不受开关限制；详见 docs/钉钉登录对接（预备）.md。',
+    desc: '预留开关（默认关闭）：开启后才允许钉钉登录回调（GET/POST /api/auth/dingtalk/callback）与后续钉钉身份验证；关闭时回调返回 403。配置与能力探测（/api/auth/dingtalk、/api/auth/dingtalk/status）不受开关限制；详见 docs/钉钉登录对接（预备文档）.md。',
   },
 ];
 function devEnabled(key) { return DEV_FEATURES.some(f => f.key === key) && getSetting('dev_' + key, '0') === '1'; }
@@ -3084,6 +3088,15 @@ async function fetchLatest(src) {
   if (!ver) throw new Error('未取到版本号');
   return { version: ver, url: j.html_url || ('https://gitee.com/' + src.repo + '/releases'), notes: String(j.body || '').slice(0, 4000), published_at: j.created_at || '', assets: assets(j.assets) };
 }
+// 两个平台的「下载页」直链：有新版本时指向该版本 tag，否则指向 releases 列表页
+function updateDownloads(ver) {
+  const u = editionUpdate();
+  const tag = ver ? ('/tag/v' + String(ver).replace(/^v/i, '')) : '/latest';
+  return {
+    github: u.github ? ('https://github.com/' + u.github + '/releases' + tag) : '',
+    gitee: u.gitee ? ('https://gitee.com/' + u.gitee + '/releases' + tag) : '',
+  };
+}
 function updateState() {
   let latest = null;
   try { latest = JSON.parse(getSetting('update_latest', '')); } catch { latest = null; }
@@ -3098,13 +3111,14 @@ function updateState() {
     last_check: getSetting('update_last_check', ''),
     last_error: getSetting('update_last_error', ''),
     latest: latest,
+    downloads: updateDownloads(latest && latest.version),
     has_update: !!(latest && latest.version && cmpVer(latest.version, APP_VERSION) > 0),
   };
 }
 // meta 里的精简版（供导航 / 首页提示用，不传发布说明全文）
 function updateBrief() {
   const s = updateState();
-  return { available: s.available, any_source: s.any_source, current: s.current, source: s.source, auto: s.auto, sources: s.sources, last_check: s.last_check, last_error: s.last_error, has_update: s.has_update, latest_version: s.latest ? s.latest.version : '', latest_url: s.latest ? s.latest.url : '', latest_source: s.latest ? s.latest.source : '' };
+  return { available: s.available, any_source: s.any_source, current: s.current, source: s.source, auto: s.auto, sources: s.sources, last_check: s.last_check, last_error: s.last_error, has_update: s.has_update, latest_version: s.latest ? s.latest.version : '', latest_url: s.latest ? s.latest.url : '', latest_source: s.latest ? s.latest.source : '', downloads: s.downloads };
 }
 async function checkUpdateNow() {
   if (!updateAnySource()) return updateState();
