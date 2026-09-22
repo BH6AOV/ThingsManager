@@ -730,6 +730,7 @@ const KIND = {
 async function renderCategories(v) {
   let mode = 'material';
   const folded = {}; // 存放位置页：仓库行折叠状态（true=已折叠分区）
+  let foldInit = false; // 首次渲染时把全部仓库置为折叠（之后按用户的选择走）
   const paint = async () => {
     const k = KIND[mode];
     const list = await api(k.api);
@@ -739,6 +740,8 @@ async function renderCategories(v) {
     else skus.forEach(s => { if (s.location) cnt.set(s.location, (cnt.get(s.location) || 0) + 1); });
     const note = $('#cat-note'); if (note) note.textContent = k.note;
     const newBtn = $('#cat-new'); if (newBtn) newBtn.textContent = mode === 'location' ? '＋ 新建仓库' : '＋ 新建';
+    const tplBtn = $('#cat-tpl'); if (tplBtn) tplBtn.style.display = mode === 'location' ? '' : 'none';
+    const impBtn = $('#cat-imp'); if (impBtn) impBtn.style.display = mode === 'location' ? '' : 'none';
     const head = $('#cat-head'); const body = $('#cat-body');
     if (!head || !body) return;
     if (mode === 'material') {
@@ -758,6 +761,8 @@ async function renderCategories(v) {
     } else {
       head.innerHTML = '<tr><th>层级</th><th>名称（分区保存后显示为：仓库名＋区名）</th><th class="num">使用数</th><th class="num">排序</th><th>备注</th><th style="width:340px">操作</th></tr>';
       const tops = list.filter(l => !l.parent_id);
+      // 默认折叠：首次渲染把所有仓库收起（用户点过展开/折叠后按用户的选择保留）
+      if (!foldInit) { tops.forEach(t => { folded[t.id] = true; }); foldInit = true; }
       const kidsOf = pid => list.filter(c => c.parent_id === pid);
       const rowHtml = (r, isTop) => `<tr ${isTop ? `data-wh="${r.id}"` : `data-par="${r.parent_id}"`} ${isTop && folded[r.id] ? 'class="wh-collapsed"' : ''}>
         <td>${isTop ? '<span class="badge orange">仓库</span>' : '<span class="badge gray" style="margin-left:14px">分区</span>'}</td>
@@ -777,6 +782,8 @@ async function renderCategories(v) {
       }
       body.innerHTML = tops.length ? htmlRows.join('')
         : '<tr><td colspan="6"><div class="empty"><div class="big">🏭</div>还没有存放位置。先「新建仓库」，再为每个仓库添加分区。</div></td></tr>';
+      const n2 = $('#cat-note');
+      if (n2) n2.textContent = k.note + ' 仓库行默认折叠，点「▸ 展开」看其下分区；可用「⬆ 按模板导入」批量建仓库与分区（模板里“仓库”必填：只填仓库=建仓库，同时填“分区/库位”=在该仓库下建分区；同名仓库 / 分区自动跳过，可重复导入）。';
     }
   };
   v.innerHTML = `
@@ -787,6 +794,8 @@ async function renderCategories(v) {
     </div>
     <span class="tag" id="cat-note" style="font-size:13px"></span>
     <div class="spacer"></div>
+    <button class="btn" id="cat-tpl" style="display:none" title="下载存放位置导入模板（列：仓库 / 分区·库位 / 代码 / 排序 / 备注）">⬇ 导入模板</button>
+    <button class="btn" id="cat-imp" style="display:none" title="按模板批量导入仓库与分区（已存在的同名仓库 / 分区自动跳过）">⬆ 按模板导入</button>
     <button class="btn primary" id="cat-new">＋ 新建</button>
   </div>
   <div class="card"><div class="tbl-wrap">
@@ -794,6 +803,8 @@ async function renderCategories(v) {
   </div></div>`;
   paint();
   $$('#kind-seg button', v).forEach(b => b.onclick = () => { mode = b.dataset.m; $$('#kind-seg button', v).forEach(x => x.classList.toggle('active', x === b)); paint(); });
+  $('#cat-tpl', v).onclick = () => impDownloadTemplate('locations');
+  $('#cat-imp', v).onclick = () => impFlow('locations', paint);
   $('#cat-new', v).onclick = async () => { const list = mode === 'material' ? [] : await api('/api/locations').catch(() => []); itemModal(mode, null, null, paint); };
   $('#cat-body', v).addEventListener('click', async e => {
     const fold = e.target.closest('[data-fold]');
@@ -1552,7 +1563,7 @@ async function snBatchRun(kind, rows) {
  * 视图：出入库（类型可切换，逐行编辑）
  * ============================================================ */
 let activeDraft = null; // 正在编辑/载入的暂存单草稿 {id, kind:'io'|'count', title}
-const io = { type: 'in', party: '', operator: '', location: '', remark: '', lines: [], flow: false, peerId: null };
+const io = { type: 'in', party: '', operator: '', location: '', remark: '', date: '', lines: [], flow: false, peerId: null };
 function openDoc(type, skuId) {
   io.type = type;
   io.lines = [];
@@ -1589,6 +1600,7 @@ async function renderIo(v, param) {
         const p = d.payload || {};
         io.type = p.type === 'out' ? 'out' : 'in';
         io.party = p.party || ''; io.remark = p.remark || ''; io.location = p.location || ''; io.operator = p.operator || '';
+        io.date = p.date || '';
         io.flow = !!p.flow; io.peerId = p.peer_id != null ? Number(p.peer_id) : null;
         io.lines = Array.isArray(p.lines) ? p.lines.map(l => ({ sku_id: l.sku_id != null ? Number(l.sku_id) : '', qty: l.qty != null ? String(l.qty) : '', snText: l.snText || '', sel: Array.isArray(l.sel) ? l.sel.map(String) : [], skuQ: '', location: l.location || '' })) : [];
         activeDraft = { id: d.id, kind: 'io', title: d.title || '' };
@@ -1612,6 +1624,7 @@ async function renderIo(v, param) {
       <button class="btn ok" id="io-save">保存单据</button>
     </div>
     <div class="row-flex" style="gap:10px;flex-wrap:wrap">
+      <label style="width:160px"><span class="lab">单据日期</span><input class="input" id="io-date" type="date" value="${esc(io.date || today())}" title="事后补单：改成实际发生日期，单据日期与编号里的日期段都会跟随它"></label>
       <label style="min-width:220px" class="grow"><span class="lab">${io.type === 'in' ? '供应商' : (io.flow ? '客户 / 领用部门（互联仓库）' : '客户 / 领用部门')}</span>${io.type === 'out' && io.flow
         ? `<select class="input" id="io-party-sel"><option value="">— 选择互联仓库 —</option>${peersOn.map(p => `<option value="${p.id}" ${String(io.peerId) === String(p.id) ? 'selected' : ''}>${esc(p.name)}（${esc(p.host)}:${p.port}）</option>`).join('')}</select>`
         : `<input class="input" id="io-party" value="${esc(io.party || (io.type === 'in' ? state.settings.default_party || '' : ''))}" placeholder="${io.type === 'in' ? '供应商' : '客户'}">`}</label>
@@ -1640,6 +1653,8 @@ async function renderIo(v, param) {
     if (!io.flow) { io.peerId = null; io.party = ''; }
     renderIo($('#view'));
   };
+  const dateInp = $('#io-date', v);
+  if (dateInp) dateInp.onchange = e => { io.date = e.target.value; };
   $('#io-op', v).oninput = e => io.operator = e.target.value;
   // 存放位置已移到明细行内（#io-loc 不再存在），单据级 location 由服务端按明细行推导
   $('#io-rmk', v).oninput = e => io.remark = e.target.value;
@@ -1659,7 +1674,7 @@ async function saveIoDraft() {
   if (!nLines && !io.party && !io.remark && !io.location) return toast('当前单据内容为空，无需暂存', 'err');
   const existed = activeDraft && activeDraft.kind === 'io';
   const title = `${TYPE_META[io.type].t}单${io.party ? ' · ' + io.party : ''} · ${nLines} 行明细`;
-  const payload = { type: io.type, party: io.party, operator: io.operator, location: io.location, remark: io.remark, flow: !!io.flow, peer_id: io.peerId, lines: io.lines.map(l => ({ sku_id: l.sku_id != null ? Number(l.sku_id) : '', qty: l.qty != null ? String(l.qty) : '', snText: l.snText || '', sel: Array.isArray(l.sel) ? l.sel.map(String) : [], location: l.location || '' })) };
+  const payload = { type: io.type, date: io.date || '', party: io.party, operator: io.operator, location: io.location, remark: io.remark, flow: !!io.flow, peer_id: io.peerId, lines: io.lines.map(l => ({ sku_id: l.sku_id != null ? Number(l.sku_id) : '', qty: l.qty != null ? String(l.qty) : '', snText: l.snText || '', sel: Array.isArray(l.sel) ? l.sel.map(String) : [], location: l.location || '' })) };
   try {
     const hide = loadingBox('暂存中…');
     let r; try { r = await api('/api/drafts', { method: 'POST', body: JSON.stringify({ id: existed ? activeDraft.id : null, kind: 'io', type: io.type, title, payload }) }); } finally { hide(); }
@@ -1820,7 +1835,8 @@ function ioCollect() {
   // 存放位置按明细行记录（单据级 location 留空，由服务端按明细行推导），因此不再从表头发送
   // flow/peer_id：出库单勾选「跨库流转」时，保存后自动推送给该互联仓库
   const isFlow = io.type === 'out' && !!io.flow && !!io.peerId;
-  return { type: io.type, party: io.party.trim(), operator: io.operator.trim() || state.settings.default_operator || '', location: '', remark: io.remark.trim(), lines, flow: isFlow, peer_id: isFlow ? io.peerId : null };
+  // doc_date：单据日期（补单用），留空 = 服务端按今天；非空时同时决定编号里的日期段
+  return { type: io.type, doc_date: io.date || '', party: io.party.trim(), operator: io.operator.trim() || state.settings.default_operator || '', location: '', remark: io.remark.trim(), lines, flow: isFlow, peer_id: isFlow ? io.peerId : null };
 }
 async function ioExport(v, data, preview) {
   try {
@@ -1846,6 +1862,8 @@ async function ioExport(v, data, preview) {
         const ad = activeDraft; activeDraft = null;
         if (ad && ad.kind === 'io') { try { await api('/api/drafts/' + ad.id, { method: 'DELETE' }); } catch {} }
         io.lines = [];
+        io.date = '';   // 保存后回到“今天”，避免下一单误用上一单的补单日期
+        const dEl = $('#io-date'); if (dEl) dEl.value = today();
         if (body.flow && body.peer_id) {
           // 勾选了跨库流转：保存后自动推送（失败则登记为待重发，不影响已保存的单据）
           const peerName = io.party || '互联仓库';
@@ -2206,7 +2224,7 @@ function openingImportFlow() {
 }
 
 /* 专项台账（计量器具 / 药品 / 办公物资）：下载导入模板 + 按模板导入 */
-const IMP_LABEL = { instruments: '计量器具', medicines: '药品', office: '办公物资' };
+const IMP_LABEL = { instruments: '计量器具', medicines: '药品', office: '办公物资', locations: '存放位置' };
 function impDownloadTemplate(kind) {
   return safeRun(() => download(`/api/import/${kind}/template`, (IMP_LABEL[kind] || '导入') + '导入模板.xlsx'));
 }
@@ -2230,7 +2248,7 @@ async function impFlow(kind, after) {
       const hide = loadingBox('导入中…'); let out;
       try { out = await api(`/api/import/${kind}/xlsx/confirm`, { method: 'POST', body: JSON.stringify({ rows: r.rows }) }); } finally { hide(); }
       close();
-      toast(`导入完成：新增 ${out.created} 行` + (out.invalid ? `，跳过 ${out.invalid} 行（缺必填）` : ''));
+      toast(`导入完成：新增 ${out.created} 行` + (out.skipped ? `，已存在跳过 ${out.skipped} 行` : '') + (out.invalid ? `，跳过 ${out.invalid} 行（缺必填）` : ''));
       after && after();
     } catch (e) { toast(e.message, 'err'); }
   };
@@ -2571,11 +2589,11 @@ async function renderDocs(v) {
     <button class="btn sm ghost" id="dc-dclear">清除时间</button>
   </div>
   <div class="card"><div class="tbl-wrap">
-  <table class="tbl"><thead><tr><th>单号</th><th>类型</th><th>往来单位</th><th>经办</th><th>存放位置</th><th class="num">合计数量</th><th class="num">行数</th><th>时间</th><th style="width:150px">操作</th></tr></thead>
+  <table class="tbl"><thead><tr><th>单号</th><th>类型</th><th>往来单位</th><th>经办</th><th>备注</th><th class="num">合计数量</th><th class="num">行数</th><th>时间</th><th style="width:150px">操作</th></tr></thead>
   <tbody>${res.rows.length ? res.rows.map(d => `<tr>
     <td class="mono"><a class="link" data-docid="${d.id}" title="点击查看该单据">${esc(d.doc_no)}</a></td>
     <td><span class="badge ${TYPE_META[d.type].c}">${TYPE_META[d.type].t}</span></td>
-    <td>${esc(d.party || '—')}</td><td>${esc(d.operator || '—')}</td><td class="muted">${esc(d.location || '—')}</td>
+    <td>${esc(d.party || '—')}</td><td>${esc(d.operator || '—')}</td><td class="muted">${esc(d.remark || '—')}</td>
     <td class="num"><b>${d.type === 'count' ? '' : d.qty}</b></td><td class="num">${d.line_count}</td>
     <td class="muted">${fmtDT(d.created_at)}</td>
     <td style="white-space:nowrap">
@@ -2904,8 +2922,7 @@ async function renderTemplates(v) {
  * 系统设置 · 关于本系统
  * 说明：关于页正文的【程序内置默认】由下方 ABOUT_CFG 控制；
  *       各版本自有的特化内容（产品名 / 文案 / 链接 / 赞赏码 / 更新源…）请放
- *       数据目录的 edition.json（首启由程序目录的 edition.default.json 初始化），
- *       见下方 EDITION_DEF 与 docs/版本特化说明.md。
+ *       数据目录的 edition.json —— 首次启动时由程序目录的 edition.default.json 初始化。
  * ============================================================ */
 const ABOUT_CFG = {
   appName: 'ThingsManager · 轻量仓库管理',
@@ -2931,7 +2948,7 @@ const ABOUT_CFG = {
     started: '2026-09',
     // 累计编写量：按本仓库开发会话记录文本估算（精确计费值取决于所用模型 / 账单，此处按本地记录估算）
     tokensEstimate: '1,181,464,440 tokens',
-    milestone: 'V0.0.0 → V0.10.9',
+    milestone: 'V0.0.0 → V0.10.10',
   },
 };
 // 【赞赏码】各版本自有的默认赞赏码**不放这里**，而是放在「程序目录 / edition.default.json」
@@ -5037,27 +5054,44 @@ async function loanBorrowModal(after) {
     } catch (e2) { toast(e2.message, 'err'); }
   };
 }
-// 在借记录“改期”：修改 应还日期 / 借期提醒天数 / 联系方式 / 备注（仅影响预警与登记，不改动单据）
+// 在借记录“修改信息”：应还日 / 借期 / 联系方式 / 借用人 / 借用日期 / 备注
+// 借用人、借用日期、备注 会由服务端同步修正到关联的开立单据（只改文字与日期，不动库存与数量）
 function loanEditModal(loan, after) {
   const isBorrow = loan.kind === 'borrow';
   const effDue = loan.eff_due || loan.due_date || '';
-  const { el, close } = modal({ title: (isBorrow ? '借入' : '借出') + ' · 改期', small: true,
-    body: `<div class="hint" style="margin-bottom:6px">${esc(loan.name)} × ${loan.qty} ${esc(loan.unit || '')}（${esc(loan.borrower)}，${isBorrow ? '借入' : '借出'}于 ${esc(loan.loan_date)}）。</div>
+  const docNo = isBorrow ? (loan.in_doc_no || '') : (loan.out_doc_no || '');
+  const docLabel = isBorrow ? '入库单' : '出库单';
+  const { el, close } = modal({ title: (isBorrow ? '借入' : '借出') + ' · 修改信息', small: true,
+    body: `<div class="hint" style="margin-bottom:6px">${esc(loan.name)} × ${loan.qty} ${esc(loan.unit || '')}（${isBorrow ? '借入' : '借出'}于 ${esc(loan.loan_date)}）${docNo ? ` · 关联${docLabel} <b>${esc(docNo)}</b>` : ''}。</div>
+      <div class="split">
+        <label class="field"><span class="lab">${isBorrow ? '借出方（对方仓库/单位）' : '借用人'}</span><input class="input" id="le-borrower" value="${esc(loan.borrower || '')}"></label>
+        <label class="field"><span class="lab">借用日期</span><input class="input" type="date" id="le-date" value="${esc(String(loan.loan_date || '').slice(0, 10))}"></label>
+      </div>
       <div class="split">
         <label class="field"><span class="lab">应还日期</span><input class="input" type="date" id="le-due" value="${esc(effDue)}"></label>
         <label class="field"><span class="lab">借期提醒天数</span><input class="input num" id="le-days" type="number" min="0" value="${esc(loan.remind_days || '')}" placeholder="如 30"></label>
       </div>
       <label class="field"><span class="lab">联系方式</span><input class="input" id="le-contact" value="${esc(loan.contact || '')}"></label>
       <label class="field"><span class="lab">备注</span><input class="input" id="le-rmk" value="${esc(loan.remark || '')}"></label>
-      <div class="hint">“借期提醒天数”= 本记录期望的借用期限（借出日+借期=应还日）。填了借期但没填应还日时系统自动推算；首页「待我处理」据此做淡黄(≤7天)/淡橙(≤3天)/淡红(超期)提示。</div>`,
+      <div class="hint">“借期提醒天数”= 本记录期望的借用期限（借用日+借期=应还日）。填了借期但没填应还日时系统自动推算；首页「待我处理」据此做淡黄(≤7天)/淡橙(≤3天)/淡红(超期)提示。<br><b>借用人 / 借用日期 / 备注</b> 的修改会同步修正到${docNo ? '关联的这张 ' + docLabel : '关联的出入库单'}（只改文字与日期，不动库存与数量；数量 / SN 如需调整请先撤回单据后重新办理）。</div>`,
     foot: '<button class="btn" data-c>取消</button><button class="btn primary" id="le-go">保存</button>' });
   $$('[data-c]', el).forEach(x => x.onclick = close);
   $('#le-go', el).onclick = async () => {
-    const body = { due_date: $('#le-due', el).value, remind_days: Number($('#le-days', el).value) || null, contact: $('#le-contact', el).value.trim(), remark: $('#le-rmk', el).value.trim() };
+    const body = {
+      borrower: $('#le-borrower', el).value.trim(),
+      loan_date: $('#le-date', el).value,
+      due_date: $('#le-due', el).value,
+      remind_days: Number($('#le-days', el).value) || null,
+      contact: $('#le-contact', el).value.trim(),
+      remark: $('#le-rmk', el).value.trim(),
+    };
+    if (!body.borrower) return toast(isBorrow ? '借出方（对方仓库/单位）不能为空' : '借用人不能为空', 'err');
     try {
       const hide = loadingBox('保存中…');
       let r; try { r = await api('/api/loans/' + loan.id, { method: 'PATCH', body: JSON.stringify(body) }); } finally { hide(); }
-      close(); toast('已更新应还期与提醒'); after && after(r);
+      close();
+      toast(r && r.synced ? `已更新借用信息，并同步修正单据 ${r.synced.doc_no}` : '已更新借用信息');
+      after && after(r);
     } catch (e) { toast(e.message, 'err'); }
   };
 }
@@ -5149,6 +5183,15 @@ function globalSearchInit() {
  * 更新日志（点击底部版本号弹出，不需单独页面）
  * ============================================================ */
 const CHANGELOG = [
+  {
+    ver: '0.10.10', title: '出入库单可选日期 · 借用改动同步单据 · 存放位置默认可导入', date: '2026-09',
+    items: [
+      '<b>出入库单可以自己选日期</b>：以前只能按“今天”出单，事后补单的日期总是不对；现在「出入库」页可直接选<b>单据日期</b>（单号里的日期段也跟着变），补的单在列表、时间筛选、报表里都落在正确的那一天',
+      '「单据流水」列表把<b>存放位置</b>列换成了<b>备注</b>（位置已按明细行显示在单据里，列表更需要看备注）',
+      '<b>修改借用信息会同步修正关联单据</b>：「物资借用」里改动<b>借用人 / 借用日期 / 备注</b>并保存后，会自动更新对应的出库单 / 入库单（只改文字与日期，不动库存和数量）',
+      '「分类设置 → 存放位置」的仓库默认<b>折叠</b>显示（点「▸ 展开」看其下分区），并新增<b>按模板批量导入</b>仓库与分区（同名自动跳过，可重复导入）',
+    ],
+  },
   {
     ver: '0.10.9', title: 'PDF 单元格自动换行 · 修复升级安装后服务未自动启动', date: '2026-09',
     items: [

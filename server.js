@@ -21,7 +21,7 @@ const { spawnSync, spawn } = require('child_process');
 // 版本号（同步落点：package.json / package-lock.json(两处) / dist/windows/build/ThingsManager.iss(MyAppVer+VersionInfoVersion) /
 //  static/index.html(#ver-chip 与 ?v=) / static/app.js(CHANGELOG 首条 + milestone) / docs 两份）；
 // 规则：修订号 +0.0.1 = 修复与小改动；次版本号 +0.1.0 = 一批新功能 / 准备发版；未发版前的后续改动并入同一版本号不重复升位
-const APP_VERSION = '0.10.9';
+const APP_VERSION = '0.10.10';
 
 const ROOT = __dirname;
 // 运行配置（桌面/安装版使用）：存于安装目录 runtime.config.json —— dataDir 等。
@@ -512,6 +512,17 @@ function escSnList(sns) { const out = []; const seen = new Set(); for (let s of 
 function addDays(iso, n) { const d = new Date(String(iso).slice(0, 10) + 'T00:00:00'); if (isNaN(d)) return iso; d.setDate(d.getDate() + n); const p = x => String(x).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
 function daysBetween(fromIso, toIso) { const a = new Date(String(fromIso).slice(0, 10) + 'T00:00:00'); const b = new Date(String(toIso).slice(0, 10) + 'T00:00:00'); if (isNaN(a) || isNaN(b)) return null; return Math.round((b - a) / 86400000); }
 function isValidDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '').trim()); }
+// 严格校验并归一化 YYYY-MM-DD：不只要求格式对，还要求“这一天真实存在”（拒绝 2026-13-99 / 2026-02-30）；
+// 不合法返回空串——用于“单据日期 / 借用日期”这类会直接写库的入参。
+function validYmd(s) {
+  const t = String(s == null ? '' : s).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return '';
+  const d = new Date(t + 'T00:00:00');
+  if (isNaN(d.getTime())) return '';
+  const p = n => String(n).padStart(2, '0');
+  if (d.getFullYear() !== +t.slice(0, 4) || d.getMonth() + 1 !== +t.slice(5, 7) || d.getDate() !== +t.slice(8, 10)) return '';
+  return `${t.slice(0, 4)}-${p(+t.slice(5, 7))}-${p(+t.slice(8, 10))}`;
+}
 // 临期：expire 在 [今天, 今天+days] 之间（今天之前算已过期，单独归入过期集合）
 function expiringSoon(rows, getExp, days = 90) {
   const t = today(); const lim = addDays(t, days); const out = [];
@@ -548,9 +559,10 @@ const DOC_META = {
   count: { label: '盘库表', prefix: 'PD',  file: 'count.xlsx' },
   list:  { label: '清单表', prefix: '',    file: 'list.xlsx' },
 };
-function nextDocNo(type) {
+// day 可传 YYYY-MM-DD（补单：单号里的日期段跟随所选“单据日期”）；留空 = 今天
+function nextDocNo(type, day) {
   const meta = DOC_META[type];
-  const stamp = today().replace(/-/g, '');
+  const stamp = (validYmd(day) || today()).replace(/-/g, '');
   const cnt = sget("SELECT COUNT(*) AS c FROM documents WHERE type=? AND doc_no LIKE ?", type, meta.prefix + stamp + '%').c;
   return meta.prefix + stamp + String(cnt + 1).padStart(3, '0');
 }
@@ -1050,11 +1062,15 @@ function createDoc(body) {
   const stock = stockMap();
   const docNoOverride = (body.doc_no != null && String(body.doc_no).trim()) || '';
   if (docNoOverride && sget('SELECT id FROM documents WHERE doc_no=?', docNoOverride)) throw new Error(`单号 ${docNoOverride} 已存在，请勿重复导入`);
+  // 单据日期（事后补单用）：可选 YYYY-MM-DD，留空 = 今天。只改“日期”部分、时间仍取当前时刻，
+  // 这样补的单在列表 / 筛选 / 报表里都落在正确的那一天，单号里的日期段也跟随它。
+  const docDay = validYmd(body.doc_date);
+  const createdAt = docDay ? (docDay + ' ' + now().slice(11)) : now();
   return tx(() => {
     if (type === 'in' || type === 'out') {
       const lines = parseLines(body.lines, type, stock);
-      const docNo = docNoOverride || nextDocNo(type);
-      const ri = iDoc.run(type, docNo, party, operator, docLocationFrom(body.location, lines, location), remark, now());
+      const docNo = docNoOverride || nextDocNo(type, docDay);
+      const ri = iDoc.run(type, docNo, party, operator, docLocationFrom(body.location, lines, location), remark, createdAt);
       const docId = Number(ri.lastInsertRowid);
       for (const L of lines) {
         const signed = (type === 'in' ? 1 : -1) * L.qty;
@@ -1076,8 +1092,8 @@ function createDoc(body) {
     // ---- 盘库 ----
     const items = Array.isArray(body.items) ? body.items : [];
     if (!items.length) throw new Error('盘库明细不能为空');
-    const docNo = docNoOverride || nextDocNo('count');
-    const ri = iDoc.run('count', docNo, body.supplier || '', operator, location, remark, now());
+    const docNo = docNoOverride || nextDocNo('count', docDay);
+    const ri = iDoc.run('count', docNo, body.supplier || '', operator, location, remark, createdAt);
     const docId = Number(ri.lastInsertRowid);
     for (const it of items) {
       const sku = requireSku(Number(it.sku_id));
@@ -1435,7 +1451,7 @@ app.get('/api/auth/dingtalk', wrap((req, res) => {
     agent_id: getSetting('dingtalk_agent_id', ''), callback: getSetting('dingtalk_callback', ''),
     provision: getSetting('dingtalk_provision', '0') === '1',
     role: ['admin', 'user', 'viewer'].includes(role) ? role : 'user',
-    callback_path: '/api/auth/dingtalk/callback', doc: 'docs/钉钉登录对接（预备文档）.md',
+    callback_path: '/api/auth/dingtalk/callback', doc: '钉钉登录对接（预备文档）',
   });
 }));
 app.post('/api/auth/dingtalk', wrap((req, res) => {
@@ -1459,7 +1475,7 @@ app.get('/api/auth/dingtalk/status', wrap((req, res) => ok(res, {
 // 钉钉登录回调（预留占位；实现前一律返回明确的未实现提示）
 function dtCallback(req, res) {
   if (!devEnabled('dingtalk')) { res.status(403).json({ ok: false, error: '钉钉登录未启用（系统设置 → 开发者选项 → 钉钉登录）' }); return; }
-  res.status(501).json({ ok: false, reserved: true, error: '预留接口：钉钉登录回调尚未实现（见 docs/钉钉登录对接（预备文档）.md）' });
+  res.status(501).json({ ok: false, reserved: true, error: '预留接口：钉钉登录回调尚未实现（参见仓库内的「钉钉登录对接（预备文档）」）' });
 }
 app.get('/api/auth/dingtalk/callback', wrap(dtCallback));
 app.post('/api/auth/dingtalk/callback', wrap(dtCallback));
@@ -1647,8 +1663,8 @@ const API_DOC_GROUPS = [
     ['POST', '/api/import/inbound-xlsx/confirm', '入库单 xlsx 确认入库'],
     ['POST', '/api/import/opening-xlsx', '盘存表开站导入：解析预览（按行解析，不按编码合并）'],
     ['POST', '/api/import/opening-xlsx/confirm', '开站导入确认：逐行建档 + 生成期初入库单'],
-    ['GET', '/api/import/:kind/template', '下载专项台账导入模板（kind = instruments / medicines / office）'],
-    ['POST', '/api/import/:kind/xlsx', '台账按模板导入：解析预览（逐行提示缺必填）'],
+    ['GET', '/api/import/:kind/template', '下载导入模板（kind = instruments 计量器具 / medicines 药品 / office 办公物资 / locations 存放位置）'],
+    ['POST', '/api/import/:kind/xlsx', '按模板导入：解析预览（逐行提示缺必填）'],
     ['POST', '/api/import/:kind/xlsx/confirm', '台账按模板导入确认写入'],
   ] },
   { name: '专项台账：计量 / 药品 / 办公 / 借用', hint: '独立台账（办公不进出库；借用走真实出入库）', items: [
@@ -1668,7 +1684,7 @@ const API_DOC_GROUPS = [
     ['POST', '/api/office/:id/toggle', '启用 / 停用办公物资'],
     ['DELETE', '/api/office/:id', '删除办公物资'],
     ['GET', '/api/loans', '借用台账（kind=lend 借出 / borrow 借入，带到期预警）'],
-    ['PATCH', '/api/loans/:id', '借用改期 / 修改联系方式'],
+    ['PATCH', '/api/loans/:id', '修改在借记录（应还日 / 借期 / 借用人 / 借用日期 / 联系方式 / 备注），并同步修正关联的出入库单'],
     ['POST', '/api/loans/borrow', '办理借用（生成出 / 入库单，真实扣 / 补库存）'],
     ['POST', '/api/loans/return', '办理归还 / 结清（生成反向单据）'],
     ['DELETE', '/api/loans/:id', '删除借用记录（需管理员密码确认；可选同时撤回关联出入库单、回退库存）'],
@@ -2319,7 +2335,9 @@ app.post('/api/export/preview-table', asy(async (req, res) => {
     records.push({ sku_code: L.sku.sku_code, name: L.sku.name, spec: L.sku.spec, unit: L.sku.unit, qty: L.qty, remark: '', location: L.location || L.sku.location, snManaged: L.snManaged, _sns: L.sns, sn: L.snManaged ? L.sns.join('\n') : '' });
     total += L.qty;
   }
-  const ctx = { doc_no: (DOC_META[type].prefix || '') + '预览', date: today(), year: dateParts(today()).year, month: dateParts(today()).month, day: dateParts(today()).day, party: body.party || '', operator: body.operator || getSetting('default_operator', ''), location: body.location || '', remark: body.remark || '', company: getSetting('company', ''), total_qty: total, total_lines: records.length, type };
+  const pvDay = validYmd(body.date) || today();
+  const pvParts = dateParts(pvDay);
+  const ctx = { doc_no: (DOC_META[type].prefix || '') + '预览', date: pvDay, year: pvParts.year, month: pvParts.month, day: pvParts.day, party: body.party || '', operator: body.operator || getSetting('default_operator', ''), location: body.location || '', remark: body.remark || '', company: getSetting('company', ''), total_qty: total, total_lines: records.length, type };
   const out = await docTableFor(type, records, ctx);
   ok(res, { layout: out.layout, rows: out.rows, total: out.total, ctx: { doc_no: ctx.doc_no, date: ctx.date, party: ctx.party, operator: ctx.operator, total_qty: total } });
 }));
@@ -2640,7 +2658,7 @@ const DEV_FEATURES = [
   {
     key: 'dingtalk',
     label: '钉钉对接验证（预留）',
-    desc: '预留开关（默认关闭）：开启后才允许钉钉登录回调（GET/POST /api/auth/dingtalk/callback）与后续钉钉身份验证；关闭时回调返回 403。配置与能力探测（/api/auth/dingtalk、/api/auth/dingtalk/status）不受开关限制；详见 docs/钉钉登录对接（预备文档）.md。',
+    desc: '预留开关（默认关闭）：开启后才允许钉钉登录回调（GET/POST /api/auth/dingtalk/callback）与后续钉钉身份验证；关闭时回调返回 403。配置与能力探测（/api/auth/dingtalk、/api/auth/dingtalk/status）不受开关限制；详见仓库内的「钉钉登录对接（预备文档）」。',
   },
 ];
 function devEnabled(key) { return DEV_FEATURES.some(f => f.key === key) && getSetting('dev_' + key, '0') === '1'; }
@@ -4477,6 +4495,17 @@ const IMP_SPECS = {
       { key: 'remark', label: '备注', aliases: ['备注', '说明'] },
     ],
   },
+  // 存放位置（仓库 / 分区）：一行 = 一个仓库，或“某仓库下的一个分区”；同一仓库出现在多行时会自动复用
+  locations: {
+    label: '存放位置', file: '存放位置导入模板.xlsx',
+    fields: [
+      { key: 'warehouse', label: '仓库', required: true, aliases: ['仓库', '仓库名称', '库房', '一级库位'] },
+      { key: 'name', label: '分区/库位', aliases: ['分区', '分区/库位', '分区名称', '库位', '二级库位', '分区名'] },
+      { key: 'code', label: '代码', aliases: ['代码', '编码', '库位代码'] },
+      { key: 'sort', label: '排序', type: 'num', aliases: ['排序', '顺序', '次序'] },
+      { key: 'remark', label: '备注', aliases: ['备注', '说明'] },
+    ],
+  },
 };
 const normKey = s => String(s == null ? '' : s).replace(/\s+/g, '').toLowerCase();
 function impSpecOf(kind) { const s = IMP_SPECS[String(kind || '')]; if (!s) throw new Error('不支持的导入类型：' + kind); return s; }
@@ -4596,13 +4625,30 @@ app.post('/api/import/:kind/xlsx/confirm', wrap((req, res) => {
     if (ex) return ex.id;
     return Number(iCat.run(n, '', 0, '', now()).lastInsertRowid);
   };
-  let created = 0, invalid = 0;
+  let created = 0, invalid = 0, skipped = 0;
   tx(() => {
     for (const r0 of rows) {
       const name = String(r0.name || '').trim();
-      if (!name) { invalid++; continue; }
       const S = k => String(r0[k] == null ? '' : r0[k]).trim();
       const D = k => (isValidDate(r0[k]) ? String(r0[k]).slice(0, 10) : '');
+      // 存放位置：先有仓库再有分区；缺少名称字段（分区名）时本行视为“仓库定义”
+      if (kind === 'locations') {
+        const wh = S('warehouse');
+        if (!wh) { invalid++; continue; }
+        const zone = S('name');
+        const top = sget('SELECT id FROM locations WHERE name=? AND parent_id IS NULL', wh);
+        if (!zone) {
+          if (top) { skipped++; continue; }      // 仓库已存在：不重建、不覆盖
+          iLoc.run(wh, null, S('code'), parseInt(r0.sort, 10) || 0, S('remark'), now());
+        } else {
+          const topId = top ? top.id : Number(iLoc.run(wh, null, '', 0, '', now()).lastInsertRowid);
+          if (sget('SELECT id FROM locations WHERE name=? AND parent_id=?', zone, topId)) { skipped++; continue; }
+          iLoc.run(zone, topId, S('code'), parseInt(r0.sort, 10) || 0, S('remark'), now());
+        }
+        created++;
+        continue;
+      }
+      if (!name) { invalid++; continue; }
       if (kind === 'instruments') {
         iInst.run(name, S('serial_no'), S('spec'), S('location'), (r0.status === 'sealed' ? 'sealed' : 'active'), D('last_date'), D('expire_date'), S('remark'), now());
       } else if (kind === 'medicines') {
@@ -4614,7 +4660,7 @@ app.post('/api/import/:kind/xlsx/confirm', wrap((req, res) => {
       created++;
     }
   });
-  ok(res, { created, invalid, total: rows.length });
+  ok(res, { created, invalid, skipped, total: rows.length });
 }));
 
 /* ============================================================
@@ -4763,12 +4809,14 @@ app.get('/api/loans', wrap((req, res) => {
     .map(l => ({ ...l, days: l.loan_date ? daysBetween(l.loan_date, t) : null, ...(l.status === 'out' ? loanAlarmFields(l) : { alarm: '', left: null, overdue: false }) }));
   ok(res, rows);
 }));
-// 修改在借记录的“应还日 / 借期提醒天数”（借期只读改期用）
+// 修改在借记录：应还日 / 借期 / 联系方式 / 备注 / 借用人 / 借用日期（仅影响预警与登记，不改动库存与数量）
+// 借用人、借用日期、备注 会同步修正到关联的**开立单据**（借出=出库单 / 借入=入库单），保持单据与登记一致
 app.patch('/api/loans/:id', wrap((req, res) => {
   const id = Number(req.params.id);
   const c = sget('SELECT * FROM loans WHERE id=?', id); if (!c) throw new Error('记录不存在');
-  if (c.status !== 'out') throw new Error('仅在借记录可改期');
+  if (c.status !== 'out') throw new Error('仅在借记录可修改');
   const b = req.body || {};
+  const isBorrow = c.kind === 'borrow';
   // 显式传了才改；due_date 传空=清除应还日（此时若有借期则自动重推）
   let dueDate = ('due_date' in b)
     ? (isValidDate(b.due_date) ? String(b.due_date).slice(0, 10) : '')
@@ -4776,12 +4824,29 @@ app.patch('/api/loans/:id', wrap((req, res) => {
   let remindDays = ('remind_days' in b)
     ? ((parseInt(b.remind_days, 10) || 0) > 0 ? Math.min(parseInt(b.remind_days, 10), 3650) : null)
     : ((parseInt(c.remind_days, 10) || 0) > 0 ? parseInt(c.remind_days, 10) : null);
-  if (!dueDate && remindDays) dueDate = addDays(String(c.loan_date || '').slice(0, 10), remindDays);
+  const loanDate = validYmd(b.loan_date) || (isValidDate(c.loan_date) ? String(c.loan_date).slice(0, 10) : today());
+  if (!dueDate && remindDays) dueDate = addDays(loanDate, remindDays);
   const contact = b.contact !== undefined ? String(b.contact).trim() : c.contact;
   const remark = b.remark !== undefined ? String(b.remark).trim() : c.remark;
-  db.prepare('UPDATE loans SET due_date=?, remind_days=?, contact=?, remark=? WHERE id=?').run(dueDate, remindDays, contact, remark, id);
+  const borrower = (b.borrower !== undefined && String(b.borrower).trim()) ? String(b.borrower).trim() : c.borrower;
+  db.prepare('UPDATE loans SET borrower=?, loan_date=?, due_date=?, remind_days=?, contact=?, remark=? WHERE id=?')
+    .run(borrower, loanDate, dueDate, remindDays, contact, remark, id);
+  // ---- 同步修正关联的开立单据（只改文字与日期，库存 / SN / 数量不受影响）----
+  let synced = null;
+  const docId = isBorrow ? c.doc_in_id : c.doc_out_id;
+  if (docId) {
+    const d = sget('SELECT * FROM documents WHERE id=?', docId);
+    if (d) {
+      const newRemark = (isBorrow ? '借入｜' : '借出｜') + remark;
+      const newCreated = (loanDate && loanDate !== dateOf(d.created_at)) ? (loanDate + ' ' + String(d.created_at).slice(11)) : d.created_at;
+      if (d.party !== borrower || d.remark !== newRemark || newCreated !== d.created_at) {
+        db.prepare('UPDATE documents SET party=?, remark=?, created_at=? WHERE id=?').run(borrower, newRemark, newCreated, docId);
+        synced = { doc_id: docId, doc_no: d.doc_no, type: d.type, party: borrower, date: dateOf(newCreated) };
+      }
+    }
+  }
   const row = sget('SELECT * FROM loans WHERE id=?', id);
-  ok(res, { ...row, ...(row.status === 'out' ? loanAlarmFields(row) : {}) });
+  ok(res, { ...row, ...(row.status === 'out' ? loanAlarmFields(row) : {}), synced });
 }));
 // 借出 / 借入：一次可多行（每行一个物资）。借出(lend)=出库单扣库存；借入(borrow)=入库单增库存
 app.post('/api/loans/borrow', wrap((req, res) => {
@@ -4793,7 +4858,7 @@ app.post('/api/loans/borrow', wrap((req, res) => {
   const contact = String(b.contact || '').trim();
   const operator = String(b.operator || '').trim() || getSetting('default_operator', '');
   const location = String(b.location || '').trim() || getSetting('default_location', '');
-  const loanDate = isValidDate(b.loan_date) ? String(b.loan_date).slice(0, 10) : today();
+  const loanDate = validYmd(b.loan_date) || today();
   let dueDate = isValidDate(b.due_date) ? String(b.due_date).slice(0, 10) : '';
   let remindDays = parseInt(b.remind_days, 10);
   if (!(remindDays > 0)) remindDays = parseInt(getSetting('loan_default_days', '0'), 10) || 0;
@@ -4805,8 +4870,9 @@ app.post('/api/loans/borrow', wrap((req, res) => {
   const lines = parseLines(b.lines, isBorrow ? 'in' : 'out', stock);
   const docType = isBorrow ? 'in' : 'out';
   const doc = tx(() => {
-    const docNo = nextDocNo(docType);
-    const ri = iDoc.run(docType, docNo, party, operator, location, (isBorrow ? '借入｜' : '借出｜') + remark, now());
+    const docNo = nextDocNo(docType, loanDate);
+    // 开立单的日期 = 借用日期（借用登记与单据日期保持一致，便于后续改期同步）
+    const ri = iDoc.run(docType, docNo, party, operator, location, (isBorrow ? '借入｜' : '借出｜') + remark, loanDate + ' ' + now().slice(11));
     const docId = Number(ri.lastInsertRowid);
     for (const L of lines) {
       const signed = (isBorrow ? 1 : -1) * L.qty;

@@ -2,7 +2,7 @@ name: Release
 
 # 发版流程：把版本号改好（package.json / .node-version / 变更日志）→ 提交 → 打 v* 标签并推送
 #   git tag v0.10.3 && git push origin main --tags
-# 本工作流会自动：校验版本一致性 → 构建各平台产物 → 生成源码包 → 创建/更新 GitHub Release
+# 本工作流会自动：校验版本一致性 → 构建各平台产物 → 生成校验清单 → 创建/更新 GitHub Release
 # 也支持手动触发（Actions → Release → Run workflow），可选 dry_run 只构建不发版。
 
 on:
@@ -208,15 +208,12 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - name: 生成源码包与校验清单
+      - name: 生成校验清单
         shell: bash
         run: |
           set -euo pipefail
-          ver='${{ needs.setup.outputs.version }}'
           mkdir -p dist
-          prefix="thingsmanager-${ver}/"
-          git archive --format=tar.gz --prefix="$prefix" -o "dist/thingsmanager-${ver}-src.tar.gz" HEAD
-          git archive --format=zip    --prefix="$prefix" -o "dist/thingsmanager-${ver}-src.zip"    HEAD
+          # 只发布各平台构建产物（源码由 GitHub / Gitee 自带的源码归档提供，不再重复打包）
           cp -f artifacts/* dist/ 2>/dev/null || true
           ( cd dist && rm -f SHA256SUMS.txt && sha256sum * > SHA256SUMS.txt )
           echo '--- 本次发布产物 ---'
@@ -245,7 +242,6 @@ jobs:
           | Debian / Ubuntu | `ThingsManager_<版本>_linux_AMD64.deb` / `_linux_ARM64.deb` | `sudo dpkg -i` 安装，systemd 常驻（`systemctl status thingsmanager`） |
           | RHEL / CentOS / Fedora | `ThingsManager_<版本>_linux_AMD64.rpm` / `_linux_ARM64.rpm` | `sudo rpm -ivh` 安装，systemd 常驻 |
           | 任意 Linux | `ThingsManager_<版本>_linux_AMD64.AppImage` / `_linux_ARM64.AppImage` | `chmod +x` 后直接运行，数据默认在 `~/.local/share/ThingsManager` |
-          | 源码 | `thingsmanager-<版本>-src.tar.gz` / `.zip` | 需要 Node.js ≥ 22，`npm ci --omit=dev` 后 `node server.js` |
 
           安装包均已内嵌精简 Node 运行时，**无需另装 Node.js 或数据库**。
           32 位 x86 不受支持（Node.js 官方已无 32 位二进制，详见 `packaging/README.md` 的「支持矩阵」）。

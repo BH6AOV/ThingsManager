@@ -115,7 +115,7 @@ git add -A && git commit -m "Release v0.10.7"
 git tag v0.10.7 && git push origin main --tags      # GitHub
 git push gitee  main --tags                          # Gitee 镜像（可选）
 # 3) CI 自动产出（约 10 分钟）：
-#    Windows 安装包 + 便携版 zip AMD64/ARM64 · deb/rpm/AppImage AMD64/ARM64 · 源码包 · SHA256SUMS.txt
+#    Windows 安装包 + 便携版 zip AMD64/ARM64 · deb/rpm/AppImage AMD64/ARM64 · SHA256SUMS.txt
 ```
 
 Release 说明由 `RELEASE-NOTE.md` + 产物清单自动生成，首行固定为 `**V<版本>** · <一句话说明>`。
