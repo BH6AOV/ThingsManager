@@ -9,10 +9,10 @@
 #define MyAppName "ThingsManager"
 #define MyPublisher "橙子木"
 #ifndef MyAppVer
-#define MyAppVer "0.10.10"
+#define MyAppVer "0.10.11"
 #endif
 #ifndef VerInfoVersion
-#define VerInfoVersion "0.10.10.0"
+#define VerInfoVersion "0.10.11.0"
 #endif
 #ifndef MyArch
 #define MyArch "x64"

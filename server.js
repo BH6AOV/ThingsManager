@@ -21,7 +21,7 @@ const { spawnSync, spawn } = require('child_process');
 // 版本号（同步落点：package.json / package-lock.json(两处) / dist/windows/build/ThingsManager.iss(MyAppVer+VersionInfoVersion) /
 //  static/index.html(#ver-chip 与 ?v=) / static/app.js(CHANGELOG 首条 + milestone) / docs 两份）；
 // 规则：修订号 +0.0.1 = 修复与小改动；次版本号 +0.1.0 = 一批新功能 / 准备发版；未发版前的后续改动并入同一版本号不重复升位
-const APP_VERSION = '0.10.10';
+const APP_VERSION = '0.10.11';
 
 const ROOT = __dirname;
 // 运行配置（桌面/安装版使用）：存于安装目录 runtime.config.json —— dataDir 等。
@@ -560,11 +560,24 @@ const DOC_META = {
   list:  { label: '清单表', prefix: '',    file: 'list.xlsx' },
 };
 // day 可传 YYYY-MM-DD（补单：单号里的日期段跟随所选“单据日期”）；留空 = 今天
+// 取号**不能用 COUNT(*)+1**：撤回中间某张单据后计数会变小，算出来的号可能与已存在的单号撞车
+// （表现为 UNIQUE constraint failed: documents.doc_no）——改为「已有号里取最大序号 +1，并跳过已占用的号」。
 function nextDocNo(type, day) {
   const meta = DOC_META[type];
   const stamp = (validYmd(day) || today()).replace(/-/g, '');
-  const cnt = sget("SELECT COUNT(*) AS c FROM documents WHERE type=? AND doc_no LIKE ?", type, meta.prefix + stamp + '%').c;
-  return meta.prefix + stamp + String(cnt + 1).padStart(3, '0');
+  const pref = meta.prefix + stamp;
+  const used = new Set();
+  let max = 0;
+  for (const r of sall('SELECT doc_no FROM documents WHERE type=? AND doc_no LIKE ?', type, pref + '%')) {
+    const m = String(r.doc_no).slice(pref.length).match(/^(\d+)$/);
+    if (!m) continue;
+    const n = parseInt(m[1], 10);
+    used.add(n);
+    if (n > max) max = n;
+  }
+  let n = max + 1;
+  while (used.has(n)) n++;
+  return pref + String(n).padStart(3, '0');
 }
 function skuById(id) { return sget('SELECT * FROM skus WHERE id=?', id); }
 function skusByCode(code) { return sall('SELECT * FROM skus WHERE sku_code=? AND active=1', String(code || '')); }
@@ -1634,7 +1647,8 @@ const API_DOC_GROUPS = [
     ['POST', '/api/sn/batch-return', '已出 SN 批量退回（生成入库单回补）'],
   ] },
   { name: '单据 / 模板 / 导出', hint: '出入库单、盘库表、活动模板与 xlsx/pdf/二维码导出', items: [
-    ['POST', '/api/docs', '新建单据（type=in 入库 / out 出库，可含 SN 明细）'],
+    ['POST', '/api/docs', '新建单据（type=in 入库 / out 出库，可含 SN 明细；doc_date 可选=补单日期）'],
+    ['PATCH', '/api/docs/:id', '更正单据信息（仅往来单位 / 经办人 / 备注；不接受日期变更）'],
     ['GET', '/api/docs', '单据列表（支持 type / q / date_from / date_to 过滤）'],
     ['GET', '/api/docs/:id', '单据详情（含明细行）'],
     ['POST', '/api/docs/:id/revoke', '撤回单据（期初导入单会连带冲红本次新建的物资 / 类别 / 库位）'],
@@ -2275,6 +2289,23 @@ app.post('/api/sn/batch-return', wrap((req, res) => {
 
 /* ---- 单据 ---- */
 app.post('/api/docs', wrap((req, res) => { const doc = createDoc(req.body); ok(res, { doc }); }));
+/* 更正单据信息（仅限文字字段）：往来单位 / 经办人 / 备注。
+ * 明确**不接受日期**（含 created_at / date / doc_date）：日期决定了库存时序与报表归属，
+ * 写错了请「撤回」后按正确日期重新录入；明细数量 / SN 也不在本接口范围。 */
+app.patch('/api/docs/:id', wrap((req, res) => {
+  const id = Number(req.params.id);
+  const doc = sget('SELECT * FROM documents WHERE id=?', id);
+  if (!doc) throw new Error('单据不存在');
+  const b = req.body || {};
+  for (const k of ['date', 'doc_date', 'created_at', 'time']) {
+    if (b[k] !== undefined) throw new Error('单据日期不可更正：如需改日期，请撤回后按正确日期重新录入');
+  }
+  const party = b.party !== undefined ? String(b.party).trim().slice(0, 120) : doc.party;
+  const operator = b.operator !== undefined ? String(b.operator).trim().slice(0, 60) : doc.operator;
+  const remark = b.remark !== undefined ? String(b.remark).trim().slice(0, 500) : doc.remark;
+  db.prepare('UPDATE documents SET party=?, operator=?, remark=? WHERE id=?').run(party, operator, remark, id);
+  ok(res, { doc: sget('SELECT * FROM documents WHERE id=?', id) });
+}));
 app.get('/api/docs', wrap((req, res) => {
   const { type = '', q = '', page = 1, date_from = '', date_to = '' } = req.query;
   const cond = [];
@@ -5391,14 +5422,14 @@ app.get('/api/search', asy(async (req, res) => {
   const like = `%${q}%`;
   const push = (key, label, rows) => { if (rows.length) out.groups.push({ key, label, rows }); };
   const m = (r, code, title, sub) => ({ id: r.id, code: String(code ?? ''), title: String(title ?? ''), sub: String(sub ?? '') });
-  push('skus', '物资', sall('SELECT s.id,s.sku_code,s.name,s.spec,s.unit,c.name category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.sku_code LIKE ? OR s.name LIKE ? OR s.spec LIKE ? ORDER BY s.sku_code LIMIT 15', like, like, like).map(r => m(r, r.sku_code, r.name, (r.category_name ? r.category_name + ' · ' : '') + (r.spec || '') + (r.unit ? ' · ' + r.unit : ''))));
-  push('sn', 'SN 序列号', sall("SELECT s.id,s.sn,s.status,sk.name,sk.sku_code FROM serial_numbers s JOIN skus sk ON sk.id=s.sku_id WHERE s.sn LIKE ? OR sk.sku_code LIKE ? OR sk.name LIKE ? ORDER BY s.id DESC LIMIT 15", like, like, like).map(r => m(r, r.sn, r.name, r.sku_code + ' · ' + (r.status === 'in' ? '在库' : '已出'))));
+  push('skus', '物资', sall('SELECT s.id,s.sku_code,s.name,s.spec,s.unit,s.location,c.name category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.sku_code LIKE ? OR s.name LIKE ? OR s.spec LIKE ? ORDER BY s.sku_code LIMIT 15', like, like, like).map(r => m(r, r.sku_code, r.name, [r.category_name, r.location, r.spec, r.unit].filter(Boolean).join(' · '))));
+  push('sn', 'SN 序列号', sall("SELECT s.id,s.sn,s.status,sk.name,sk.sku_code,sk.location FROM serial_numbers s JOIN skus sk ON sk.id=s.sku_id WHERE s.sn LIKE ? OR sk.sku_code LIKE ? OR sk.name LIKE ? ORDER BY s.id DESC LIMIT 15", like, like, like).map(r => m(r, r.sn, r.name, [r.sku_code, r.location, (r.status === 'in' ? '在库' : '已出')].filter(Boolean).join(' · '))));
   const DL = { in: '入库', out: '出库', count: '盘库' };
   push('docs', '单据', sall('SELECT * FROM documents WHERE doc_no LIKE ? OR party LIKE ? OR operator LIKE ? ORDER BY id DESC LIMIT 15', like, like, like).map(r => m(r, r.doc_no, DL[r.type] || r.type, [(r.party || ''), (r.operator || ''), dateOf(r.created_at)].filter(Boolean).join(' · '))));
   push('instruments', '计量器具', sall('SELECT * FROM instruments WHERE name LIKE ? OR serial_no LIKE ? OR location LIKE ? ORDER BY expire_date LIMIT 15', like, like, like).map(r => m(r, r.serial_no, r.name, [r.location, r.expire_date ? '到期 ' + r.expire_date : '', r.status === 'sealed' ? '封存' : '在用'].filter(Boolean).join(' · '))));
   push('medicines', '药品', sall('SELECT * FROM medicines WHERE name LIKE ? OR source LIKE ? OR code LIKE ? ORDER BY expire_date LIMIT 15', like, like, like).map(r => m(r, r.code, r.name, [r.source, r.expire_date ? '有效期 ' + r.expire_date : ''].filter(Boolean).join(' · '))));
-  push('office', '办公物资', sall("SELECT o.id,o.code,o.name,o.spec,o.unit,o.qty,o.location,c.name category_name FROM office_items o LEFT JOIN categories c ON c.id=o.category_id WHERE o.code LIKE ? OR o.name LIKE ? OR o.spec LIKE ? ORDER BY o.code LIMIT 15", like, like, like).map(r => m(r, r.code, r.name, (r.category_name ? r.category_name + ' · ' : '') + (r.spec || '') + ' · 数量 ' + (r.qty || 0) + (r.location ? ' · ' + r.location : ''))));
-  push('loans', '物资借用', sall("SELECT l.id,l.borrower,l.sku_code,l.name,l.qty,l.unit,l.loan_date,l.status FROM loans l WHERE l.borrower LIKE ? OR l.sku_code LIKE ? OR l.name LIKE ? ORDER BY l.id DESC LIMIT 15", like, like, like).map(r => m(r, r.name, r.borrower, r.sku_code + ' ×' + r.qty + (r.unit || '') + ' · ' + (r.status === 'out' ? '在借' : '已还') + ' · 借 ' + r.loan_date)));
+  push('office', '办公物资', sall("SELECT o.id,o.code,o.name,o.spec,o.unit,o.qty,o.location,c.name category_name FROM office_items o LEFT JOIN categories c ON c.id=o.category_id WHERE o.code LIKE ? OR o.name LIKE ? OR o.spec LIKE ? ORDER BY o.code LIMIT 15", like, like, like).map(r => m(r, r.code, r.name, [r.category_name, r.location, r.spec, '数量 ' + (r.qty || 0)].filter(Boolean).join(' · '))));
+  push('loans', '物资借用', sall("SELECT l.id,l.borrower,l.sku_code,l.name,l.qty,l.unit,l.loan_date,l.status,sk.location FROM loans l LEFT JOIN skus sk ON sk.id=l.sku_id WHERE l.borrower LIKE ? OR l.sku_code LIKE ? OR l.name LIKE ? ORDER BY l.id DESC LIMIT 15", like, like, like).map(r => m(r, r.name, r.borrower, [r.sku_code + ' ×' + r.qty + (r.unit || ''), r.location, (r.status === 'out' ? '在借' : '已还'), '借 ' + r.loan_date].filter(Boolean).join(' · '))));
   // 互联仓库：并发查对端物资表后按关键词过滤（仅显示对端名称，不暴露令牌）
   const peers = sall('SELECT * FROM peers WHERE enabled=1');
   const results = await Promise.all(peers.map(async p => {

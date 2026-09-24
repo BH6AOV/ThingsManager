@@ -1894,6 +1894,33 @@ async function printDocPdf(id) {
   hide();
   printPdfBlob(blob);
 }
+// 更正单据信息：只改「往来单位 / 经办人 / 备注」。
+// **单据日期不可改**（日期决定库存时序与报表归属），明细数量 / SN 也不在此处调整 —— 写错了请撤回后重新录入。
+async function docFixModal(id, after) {
+  let d;
+  try { d = await api('/api/docs/' + id); } catch (e) { return toast(e.message, 'err'); }
+  const doc = d.doc;
+  const t = TYPE_META[doc.type] || {};
+  const partyLabel = doc.type === 'in' ? '供应商' : (doc.type === 'count' ? '往来单位' : '客户 / 领用部门');
+  const { el, close } = modal({ title: `更正单据信息 · ${doc.doc_no}`, small: true,
+    body: `<div class="hint" style="margin-bottom:8px">${esc(t.t || '')}单 <b class="mono">${esc(doc.doc_no)}</b> · 单据日期 <b>${esc(String(doc.created_at || '').slice(0, 10))}</b></div>
+      <label class="field"><span class="lab">${partyLabel}</span><input class="input" id="df-party" value="${esc(doc.party || '')}"></label>
+      <label class="field"><span class="lab">经办人</span><input class="input" id="df-op" value="${esc(doc.operator || '')}"></label>
+      <label class="field"><span class="lab">备注</span><input class="input" id="df-rmk" value="${esc(doc.remark || '')}"></label>
+      <div class="hint">本功能只更正<b>信息</b>：<b>单据日期不可修改</b>，明细数量 / SN 也不在此处调整。<br>若日期或数量写错了，请先「撤回」该单据，再按正确信息重新录入。</div>`,
+    foot: '<button class="btn" data-c>取消</button><button class="btn primary" id="df-go">保存更正</button>' });
+  $$('[data-c]', el).forEach(x => x.onclick = close);
+  $('#df-go', el).onclick = async () => {
+    try {
+      const hide = loadingBox('保存中…');
+      try {
+        await api('/api/docs/' + id, { method: 'PATCH', body: JSON.stringify({ party: $('#df-party', el).value.trim(), operator: $('#df-op', el).value.trim(), remark: $('#df-rmk', el).value.trim() }) });
+      } finally { hide(); }
+      close(); toast('单据信息已更正');
+      after && after();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+}
 // 新版本的两个下载入口（GitHub / Gitee 发布页）；首页「待我处理」、关于页、设置页共用
 function updateDlBtns(U) {
   const d = (U && U.downloads) || {};
@@ -2600,6 +2627,7 @@ async function renderDocs(v) {
         ${d.type !== 'count' ? `<button class="btn sm" data-act="flow" data-id="${d.id}" title="跨库流转：把该单推送到目标仓库，对方人工确认入账">流转</button>` : ''}
         <button class="btn sm" data-act="view" data-id="${d.id}">查看</button>
         <button class="btn sm" data-act="editx" data-id="${d.id}" title="导出并手工调整(日期/数量)">✎调整</button>
+        <button class="btn sm" data-act="fix" data-id="${d.id}" title="更正该单据的信息（往来单位 / 经办人 / 备注）；单据日期不可在此修改">✎更正</button>
         ${d.type !== 'count' ? `<button class="btn sm primary" data-act="ex" data-id="${d.id}">xlsx</button>` : `<button class="btn sm primary" data-act="ex" data-id="${d.id}">xlsx</button>`}
         ${d.type !== 'count' ? `<button class="btn sm ok" data-act="pdf" data-id="${d.id}">PDF</button>` : ''}
         <button class="btn sm" data-act="qr" data-id="${d.id}" title="二维码">QR</button>
@@ -2632,6 +2660,7 @@ async function renderDocs(v) {
       else if (act === 'qr') openQrModal(id, d.doc_no, d.type);
       else if (act === 'flow') flowSendModal(id, d);
       else if (act === 'editx') { if (d.type === 'count') toast('盘库表请用盘库页的“导出盘点表(可修正)”', 'info'); else { try { await safeRun(() => docReprintDialog(id)); } catch {} } }
+      else if (act === 'fix') { try { await safeRun(() => docFixModal(id, () => renderDocs($('#view')))); } catch {} }
       else if (act === 'revoke') {
         if (await confirmBox(`确认撤回单据 ${d.doc_no}？将回退其库存/SN 影响并删除该单（不可恢复）。${d.party === '期初导入' ? '<br><b>这是开站期初导入单</b>：撤回将一并冲红该次导入新建且未被使用的物资 / 类别 / 存放位置。' : ''}`, { danger: true, okText: '撤回' })) {
           try { const rr = await api(`/api/docs/${id}/revoke`, { method: 'POST', body: '{}' }); let msg = `已撤回 ${rr.doc_no}`; if (rr.rollback && rr.rollback.opening) msg += `，冲红开站导入：删除物资 ${rr.rollback.skus}、类别 ${rr.rollback.cats}、库位 ${rr.rollback.locs}`; toast(msg); state.skus = []; allSkusCache = null; renderDocs($('#view')); } catch (e) { toast(e.message, 'err'); }
@@ -2760,6 +2789,7 @@ async function viewDoc(id) {
       ${isCount ? '' : '<button class="btn" id="vd-json" title="导出 .json 文件供对方导入（数据过大扫不出二维码时使用）">导出入库文件</button>'}
       ${isCount ? '' : '<button class="btn ok" id="vd-pdf">导出 PDF</button>'}
       ${isCount ? '' : '<button class="btn" id="vd-print" title="直接呼出系统打印控件打印本单据的 PDF">🖨️ 打印</button>'}
+      <button class="btn" id="vd-fix" title="更正该单据的信息（往来单位 / 经办人 / 备注）；单据日期不可改">✎ 更正信息</button>
       <button class="btn primary" id="vd-ex">导出 xlsx</button>
       <button class="btn danger" id="vd-rev">撤回单据</button>`
   });
@@ -2768,6 +2798,7 @@ async function viewDoc(id) {
   $('#vd-ex').onclick = () => download(`/api/export/docs/${id}`, `${TYPE_META[d.doc.type].t}单_${d.doc.doc_no}.xlsx`);
   const vdPdf = $('#vd-pdf'); if (vdPdf) vdPdf.onclick = () => previewPdf(`/api/export/docs/${id}/pdf`, `${TYPE_META[d.doc.type].t}单 ${d.doc.doc_no}`);
   const vdPrint = $('#vd-print'); if (vdPrint) vdPrint.onclick = () => printDocPdf(id);
+  const vdFix = $('#vd-fix'); if (vdFix) vdFix.onclick = () => docFixModal(id, () => { const root = $('#modal-root'); root.classList.remove('open'); root.innerHTML = ''; show('docs', undefined, { force: true }); });
   const vdJson = $('#vd-json'); if (vdJson) vdJson.onclick = () => exportDocFile(id, d.doc.doc_no, d.doc.type);
   $('#vd-qr').onclick = () => openQrModal(id, d.doc.doc_no, d.doc.type);
   $('#vd-rev').onclick = async () => {
@@ -2796,6 +2827,7 @@ async function renderDocDetail(v, param) {
     ${isCount ? '' : '<button class="btn" id="dd-json" title="导出 .json 文件供对方导入（数据过大扫不出二维码时使用）">导出入库文件</button>'}
     ${isCount ? '' : '<button class="btn ok" id="dd-pdf">导出 PDF</button>'}
     ${isCount ? '' : '<button class="btn" id="dd-print" title="直接呼出系统打印控件打印本单据的 PDF">🖨️ 打印</button>'}
+    <button class="btn" id="dd-fix" title="更正该单据的信息（往来单位 / 经办人 / 备注）；单据日期不可改">✎ 更正信息</button>
     <button class="btn primary" id="dd-ex">导出 xlsx</button>
     <button class="btn danger" id="dd-rev" title="回退该单库存/SN影响并删除">撤回单据</button>
   </div>
@@ -2820,6 +2852,7 @@ async function renderDocDetail(v, param) {
   $('#dd-ex', v).onclick = () => download(`/api/export/docs/${id}`, `${tName}单_${doc.doc_no}.xlsx`);
   const ddPdf = $('#dd-pdf', v); if (ddPdf) ddPdf.onclick = () => previewPdf(`/api/export/docs/${id}/pdf`, `${tName}单 ${doc.doc_no}`);
   const ddPrint = $('#dd-print', v); if (ddPrint) ddPrint.onclick = () => printDocPdf(id);
+  const ddFix = $('#dd-fix', v); if (ddFix) ddFix.onclick = () => docFixModal(id, () => show('docdetail', { id }, { force: true }));
   const ddJson = $('#dd-json', v); if (ddJson) ddJson.onclick = () => exportDocFile(id, doc.doc_no, doc.type);
   $('#dd-qr', v).onclick = () => openQrModal(id, doc.doc_no, doc.type);
   $('#dd-rev', v).onclick = async () => {
@@ -2948,7 +2981,7 @@ const ABOUT_CFG = {
     started: '2026-09',
     // 累计编写量：按本仓库开发会话记录文本估算（精确计费值取决于所用模型 / 账单，此处按本地记录估算）
     tokensEstimate: '1,181,464,440 tokens',
-    milestone: 'V0.0.0 → V0.10.10',
+    milestone: 'V0.0.0 → V0.10.11',
   },
 };
 // 【赞赏码】各版本自有的默认赞赏码**不放这里**，而是放在「程序目录 / edition.default.json」
@@ -5156,7 +5189,9 @@ function runGlobalSearch() {
       const items = grp.rows.map(row => {
         const peerAttr = row.peer_id ? ` data-peer="${row.peer_id}"` : '';
         const idAttr = row.id != null && !row.peer_id ? ` data-id="${row.id}"` : '';
-        return `<div class="gs-item" data-key="${grp.key}"${idAttr}${peerAttr}><div class="gs-main"><b>${esc(row.code || '')}</b> <span>${esc(row.title || '')}</span><div class="muted" style="font-size:12px">${esc(row.sub || '')}</div></div><span class="gs-arrow">›</span></div>`;
+        const subFull = String(row.sub || '');
+        const subShow = subFull.length > 20 ? subFull.slice(0, 20) + '…' : subFull;
+        return `<div class="gs-item" data-key="${grp.key}"${idAttr}${peerAttr}><div class="gs-main"><b>${esc(row.code || '')}</b> <span>${esc(row.title || '')}</span><div class="muted" style="font-size:12px" title="${esc(subFull)}">${esc(subShow)}</div></div><span class="gs-arrow">›</span></div>`;
       }).join('');
       return `<div class="gs-group"><div class="gs-head">${head}<span class="muted">${grp.rows.length}</span></div>${items}</div>`;
     }).join('');
@@ -5183,6 +5218,14 @@ function globalSearchInit() {
  * 更新日志（点击底部版本号弹出，不需单独页面）
  * ============================================================ */
 const CHANGELOG = [
+  {
+    ver: '0.10.11', title: '修复撤回单据后重复单号 · 新增单据信息更正 · 搜索结果带存放位置', date: '2026-09',
+    items: [
+      '<b>修复：撤回某张出入库单后再开新单会提示“单号已存在”</b>——以前撤回中间或靠前的单据后，新单号是按“剩余张数 +1”算的，会与已存在的单号重复；现在改为按当天已有的最大单号顺延，撤回任意一张都能继续正常开单',
+      '<b>新增「✎ 更正信息」</b>：在单据流水列表、单据查看弹窗、单据详情页都可以修改单据的<b>往来单位 / 经办人 / 备注</b>。<b>单据日期不可修改</b>（日期决定库存时序与报表归属）；如需改日期或数量 / SN，请先「撤回」再按正确信息重新录入',
+      '<b>全局搜索（Ctrl+K）的结果现在显示存放位置</b>（物资 / SN / 借用 / 办公物资等）；描述过长时截断显示，鼠标悬停可看完整内容',
+    ],
+  },
   {
     ver: '0.10.10', title: '出入库单可选日期 · 借用改动同步单据 · 存放位置默认可导入', date: '2026-09',
     items: [
