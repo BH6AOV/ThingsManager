@@ -315,35 +315,98 @@ async function refreshTemplates() { state.templates = await api('/api/templates'
 function skuById(id) { return (allSkusCache || state.skus).find(s => s.id === Number(id)) || null; }
 
 /* ---------- 物资下拉框搜索（物资多时快速定位） ----------
- * 原生 <select> 不能内置搜索，这里在其上方插入一个过滤输入框：
- * 输入关键词即按“物资编码 / 名称 / 型号”（即选项文字）过滤选项，并始终保留“未选择”项与当前选中项。
- * 只重建 <option>、不改动 select 的 value，因此各页面固有的 onchange 逻辑不受影响。
+ * 原生 <select> 不能内置搜索，这里在其上方插入搜索框 + 自动展开的候选列表：
+ *  - 输入关键词即按“物资编码 / 名称 / 规格 / 存放位置”过滤，并自动列出匹配条目；
+ *  - 候选条目统一显示为「物资编码|名称 · 规格（超 25 字截断） · 存放位置」，点一下即选中（↑↓ 选择、Enter 确认、Esc 清空）；
+ *  - 只重建 <option>、不改动 select 的 value，因此各页面固有的 onchange 逻辑不受影响。
  * 适用范围：出入库明细、借用明细、SN 页筛选、SN 批量录入等所有“选物资”的下拉框。 */
+function skuSpecText(spec, n = 25) {
+  const s = String(spec == null ? '' : spec).replace(/\s+/g, ' ').trim();
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+// 物资条目统一显示文案：物资编码|名称 · 规格（25 字截断） · 存放位置
+function skuOptText(x) {
+  const parts = [String(x.name == null ? '' : x.name).trim()].filter(Boolean);
+  const sp = skuSpecText(x.spec, 25); if (sp) parts.push(sp);
+  const loc = String(x.location == null ? '' : x.location).trim(); if (loc) parts.push(loc);
+  const rest = parts.join(' · ');
+  const code = String(x.sku_code == null ? '' : x.sku_code).trim();
+  return code ? (rest ? code + '|' + rest : code) : rest;
+}
+// 搜索用的隐藏文本：编码 / 名称 / 规格 / 位置 / 单位都参与匹配（与显示文案一致，都能搜到）
+function skuOptKey(x) {
+  return [x.sku_code, x.name, x.spec, x.location, x.unit].map(v => String(v == null ? '' : v)).join(' ');
+}
 function skuOptAll(sel) {
-  if (!sel._skuAll) sel._skuAll = Array.from(sel.options).map(o => ({ value: o.value, text: o.textContent }));
+  if (!sel._skuAll) sel._skuAll = Array.from(sel.options).map(o => ({ value: o.value, text: o.textContent, key: o.dataset.k || o.textContent }));
   return sel._skuAll;
+}
+function skuMatch(list, kw, keep) {
+  const q = String(kw || '').trim().toLowerCase();
+  let out = list.filter(o => !o.value || !q || String(o.key || o.text).toLowerCase().includes(q) || o.value === keep);
+  if (keep && !out.some(o => o.value === keep)) { const k = list.find(o => o.value === keep); if (k) out = [k, ...out]; }
+  return out;
 }
 function filterSkuSelect(sel, kw) {
   if (!sel) return;
-  const all = skuOptAll(sel), cur = sel.value, q = String(kw || '').trim().toLowerCase();
-  let list = all.filter(o => !o.value || !q || o.text.toLowerCase().includes(q) || o.value === cur);
-  if (cur && !list.some(o => o.value === cur)) { const k = all.find(o => o.value === cur); if (k) list = [k, ...list]; }
+  const all = skuOptAll(sel), cur = sel.value;
+  const list = skuMatch(all, kw, cur);
   sel.innerHTML = '';
-  for (const o of list) { const op = document.createElement('option'); op.value = o.value; op.textContent = o.text; sel.appendChild(op); }
+  for (const o of list) { const op = document.createElement('option'); op.value = o.value; op.textContent = o.text; if (o.key) op.dataset.k = o.key; sel.appendChild(op); }
   sel.value = cur;
 }
-// 给物资下拉框装搜索框（返回搜索输入框，调用方可据此保存关键词以便重绘后恢复）
+// 给物资下拉框装搜索框 + 自动展开的候选列表（返回搜索输入框，调用方可据此保存关键词以便重绘后恢复）
 function attachSkuSearch(sel, opts) {
   if (!sel || sel.dataset.skuSearch === '1') return null;
   sel.dataset.skuSearch = '1';
   const o = opts || {};
+  const wrap = document.createElement('div'); wrap.className = 'sku-sbox';
   const box = document.createElement('input');
   box.type = 'search'; box.className = 'input sku-search'; box.autocomplete = 'off';
-  box.placeholder = o.placeholder || '🔍 输入编码 / 名称 / 型号筛选物资…';
-  box.title = '物资较多时，在这里输入关键词即可快速过滤下面的物资下拉框（Esc 清空）';
-  sel.parentNode.insertBefore(box, sel);
-  box.addEventListener('input', () => filterSkuSelect(sel, box.value));
-  box.addEventListener('keydown', e => { if (e.key === 'Escape') { box.value = ''; filterSkuSelect(sel, ''); } });
+  box.placeholder = o.placeholder || '🔍 输入编码 / 名称 / 规格 / 位置，自动列出匹配物资…';
+  box.title = '输入关键词即自动列出匹配物资（条目显示「物资编码|名称 · 规格 · 存放位置」），点击候选即选中；↑↓ 选择、Enter 确认、Esc 清空';
+  const sug = document.createElement('div'); sug.className = 'sku-sug'; sug.hidden = true;
+  wrap.appendChild(box); wrap.appendChild(sug);
+  sel.parentNode.insertBefore(wrap, sel);
+  let rows = [], active = -1;
+  const hideSug = () => { sug.hidden = true; sug.innerHTML = ''; rows = []; active = -1; };
+  const paintActive = () => Array.from(sug.children).forEach((el, i) => el.classList.toggle('on', i === active));
+  const pick = v => {
+    if (!v) return;
+    box.value = ''; box.dispatchEvent(new Event('input', { bubbles: true }));   // 先清关键词（部分页面会重绘），避免选中后残留过滤
+    sel.value = v;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    hideSug();
+  };
+  const drawSug = () => {
+    const kw = String(box.value || '').trim();
+    if (!kw) { hideSug(); return; }
+    const all = skuOptAll(sel).filter(x => x.value);
+    const hits = all.filter(x => String(x.key || x.text).toLowerCase().includes(kw.toLowerCase())).slice(0, 50);
+    rows = hits; active = -1;
+    if (!hits.length) { sug.hidden = false; sug.innerHTML = '<div class="sku-sug-empty">没有匹配的物资</div>'; return; }
+    const q = kw.toLowerCase();
+    sug.innerHTML = hits.map(x => {
+      const t = x.text, at = t.toLowerCase().indexOf(q);
+      const label = at >= 0 ? esc(t.slice(0, at)) + '<b>' + esc(t.slice(at, at + kw.length)) + '</b>' + esc(t.slice(at + kw.length)) : esc(t);
+      return `<div class="sku-sug-item" data-v="${esc(x.value)}">${label}</div>`;
+    }).join('');
+    sug.hidden = false;
+  };
+  sug.addEventListener('pointerdown', e => { if (e.target.closest('.sku-sug-item')) e.preventDefault(); });  // 防止 blur 先关掉面板
+  sug.addEventListener('click', e => { const it = e.target.closest('.sku-sug-item'); if (it) pick(it.dataset.v); });
+  box.addEventListener('input', () => { filterSkuSelect(sel, box.value); drawSug(); });
+  box.addEventListener('focus', drawSug);
+  box.addEventListener('blur', () => setTimeout(hideSug, 150));
+  box.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { box.value = ''; filterSkuSelect(sel, ''); hideSug(); return; }
+    if (sug.hidden || !rows.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      active = (active + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+      paintActive(); const el = sug.children[active]; if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') { e.preventDefault(); pick((rows[active >= 0 ? active : 0] || {}).value); }
+  });
   if (o.value) { box.value = o.value; filterSkuSelect(sel, box.value); }
   return box;
 }
@@ -352,7 +415,7 @@ function attachSkuSearch(sel, opts) {
 const PAGES = [
   { g: '业务操作', items: [['dashboard', '🏠', '仪表盘'], ['io', '📥', '出入库'], ['count', '📋', '盘库'], ['docs', '🧾', '单据流水'], ['loans', '🔖', '物资借用'], ['flows', '🔄', '跨库流转']] },
   { g: '基础资料', items: [['skus', '📦', '物资管理'], ['categories', '🗂️', '分类设置'], ['stock', '🗃️', '库存 & 清单']] },
-  { g: '专项台账', items: [['instruments', '📏', '计量器具'], ['medicines', '💊', '药品管理'], ['office', '🖨️', '办公物资']] },
+  { g: '专项台账', items: [['instruments', '📏', '计量器具'], ['medicines', '💊', '药品管理'], ['damages', '🔧', '坏件管理'], ['office', '🖨️', '办公物资']] },
   { g: 'SN 追踪', items: [['sn', '🔢', 'SN 管理']] },
 ];
 function navGroups() {
@@ -382,7 +445,7 @@ function refreshNav() {
   buildNav();
   $$('.nav-btn[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === state.nav));
 }
-const TITLES = { dashboard: '仪表盘', io: '出入库', count: '盘库', docs: '单据流水', skus: '物资管理', categories: '分类设置', stock: '库存 & 清单', sn: 'SN 管理', interlink: '互联仓库', instruments: '计量器具', medicines: '药品管理', loans: '物资借用', office: '办公物资', flows: '跨库流转', docdetail: '单据详情', templates: '模板设置', settings: '系统设置' };
+const TITLES = { dashboard: '仪表盘', io: '出入库', count: '盘库', docs: '单据流水', skus: '物资管理', categories: '分类设置', stock: '库存 & 清单', sn: 'SN 管理', interlink: '互联仓库', instruments: '计量器具', medicines: '药品管理', damages: '坏件管理', loans: '物资借用', office: '办公物资', flows: '跨库流转', docdetail: '单据详情', templates: '模板设置', settings: '系统设置' };
 /* 明暗主题：持久化到 localStorage，作用于 <html data-theme> */
 function setTheme(t) {
   const dark = t === 'dark';
@@ -1452,7 +1515,7 @@ async function renderSn(v, param) {
     <select class="input" id="sn-status" style="width:110px">
       <option value="">全部状态</option><option value="in">在库</option><option value="out">已出库</option>
     </select>
-    <select class="input" id="sn-sku" style="min-width:150px"><option value="">全部物资</option>${skus.map(s => `<option value="${s.id}" ${filter.sku_id == s.id ? 'selected' : ''}>${esc(s.sku_code)} ${esc(s.name)}${s.sn_managed ? '' : ' (非SN)'}</option>`).join('')}</select>
+    <select class="input" id="sn-sku" style="min-width:150px"><option value="">全部物资</option>${skus.map(s => `<option value="${s.id}" data-k="${esc(skuOptKey(s))}" ${filter.sku_id == s.id ? 'selected' : ''}>${esc(skuOptText(s))}${s.sn_managed ? '' : '（非SN）'}</option>`).join('')}</select>
     <div class="spacer"></div>
     <button class="btn primary" id="sn-add" title="在文本框内一次粘贴多个 SN（支持换行 / 逗号 / 分号），批量生成入库单">＋ 批量录入 SN</button>
     <span class="tag">SN 唯一性按物资校验；同一物资 SN 不可重复入库。</span>
@@ -1491,7 +1554,7 @@ async function renderSn(v, param) {
   paint();
   $('#sn-q').oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { filter.q = $('#sn-q').value.trim(); paint(); }, 250); }; })();
   $('#sn-status').onchange = e => { filter.status = e.target.value; paint(); };
-  attachSkuSearch($('#sn-sku', v), { placeholder: '🔍 筛选物资（编码 / 名称 / 型号）' });
+  attachSkuSearch($('#sn-sku', v), { placeholder: '🔍 输入编码 / 名称 / 规格 / 位置，自动列出匹配物资…' });
   $('#sn-sku').onchange = e => { filter.sku_id = e.target.value; paint(); };
   const snAdd = $('#sn-add', v); if (snAdd) snAdd.onclick = () => snQuickAdd(async () => { state.skus = []; allSkusCache = null; await paint(); });
 }
@@ -1504,7 +1567,7 @@ function snQuickAdd(after) {
     if (!sns.length) { toast('当前没有可用的“SN 管理”物资，请先在物资管理中开启', 'err'); return; }
     const { el, close } = modal({ title: '批量录入 SN（入库）', small: true,
       body: `<div class="hint" style="margin-bottom:8px">在文本框内输入 / 粘贴<b>多个 SN</b>，一次批量入库。支持<b>换行</b>、<b>逗号（中/英文）</b>、分号、空格分隔；重复与已在库的会自动忽略并提示。</div>
-        <label class="field"><span class="lab">SN 物资 *</span><select class="input" id="sa-sku"><option value="">— 选择 SN 管理物资 —</option>${sns.map(s => `<option value="${s.id}">${esc(s.sku_code)}｜${esc(s.name)}${s.spec ? ' · ' + esc(s.spec) : ''}</option>`).join('')}</select></label>
+        <label class="field"><span class="lab">SN 物资 *</span><select class="input" id="sa-sku"><option value="">— 选择 SN 管理物资 —</option>${sns.map(s => `<option value="${s.id}" data-k="${esc(skuOptKey(s))}">${esc(skuOptText(s))}</option>`).join('')}</select></label>
         <label class="field"><span class="lab">SN 列表 *（每行一个，也支持逗号分隔）</span><textarea class="input mono" id="sa-sns" rows="8" style="font-family:monospace" placeholder="SN-1001, SN-1002&#10;SN-1003&#10;…"></textarea></label>
         <div class="hint" id="sa-cnt" style="margin-bottom:8px">已识别 <b>0</b> 个 SN</div>
         <div class="row-flex" style="gap:8px">
@@ -1514,7 +1577,7 @@ function snQuickAdd(after) {
         <label class="field"><span class="lab">备注</span><input class="input" id="sa-rmk" placeholder="如 批量快速录入"></label>`,
       foot: `<button class="btn" data-c>取消</button><button class="btn primary" id="sa-go">批量入库</button>` });
     $$('[data-c]', el).forEach(x => x.onclick = close);
-    attachSkuSearch($('#sa-sku', el), { placeholder: '🔍 筛选 SN 管理物资（编码 / 名称 / 型号）' });
+    attachSkuSearch($('#sa-sku', el), { placeholder: '🔍 输入编码 / 名称 / 规格 / 位置，自动列出匹配物资…' });
     const count = () => {
       const v = $('#sa-sns', el).value;
       const arr = String(v || '').split(/[\s,;，；]+/).map(x => x.trim()).filter(Boolean);
@@ -1739,9 +1802,9 @@ function ioPaintLines(v, data) {
         <div style="width:320px"><span class="lab">物资</span>
           <select class="input" data-f="sku">
             <option value="">— 选择物资 —</option>
-            ${skus.map(x => `<option value="${x.id}" ${l.sku_id == x.id ? 'selected' : ''}>${esc(x.sku_code)}｜${esc(x.name)}${x.spec ? ' · ' + esc(x.spec) : ''}${x.sn_managed ? ' [SN]' : ''}</option>`).join('')}
+            ${skus.map(x => `<option value="${x.id}" data-k="${esc(skuOptKey(x))}" ${l.sku_id == x.id ? 'selected' : ''}>${esc(skuOptText(x))}</option>`).join('')}
           </select>
-          ${isSn ? '' : s ? `<div class="hint">当前库存：<b>${s.sn_managed ? s.sn_in : s.qty}</b> ${esc(s.unit || '')}</div>` : ''}
+          ${s ? `<div class="hint">当前库存：<b>${s.sn_managed ? s.sn_in : s.qty}</b> ${esc(s.unit || '')}${s.sn_managed ? ' · SN 管理' : ''}</div>` : ''}
         </div>
         ${isSn && io.type === 'in' ? `<div class="grow newsn"><span class="lab">SN 序列号（每行一个，可扫码枪连续扫描；也可批量粘贴）</span>
             <textarea class="input mono" data-f="sntext" rows="6" placeholder="SN-1001&#10;SN-1002&#10;…">${esc(l.snText)}</textarea>
@@ -2616,14 +2679,14 @@ async function renderDocs(v) {
     <button class="btn sm ghost" id="dc-dclear">清除时间</button>
   </div>
   <div class="card"><div class="tbl-wrap">
-  <table class="tbl"><thead><tr><th>单号</th><th>类型</th><th>往来单位</th><th>经办</th><th>备注</th><th class="num">合计数量</th><th class="num">行数</th><th>时间</th><th style="width:150px">操作</th></tr></thead>
+  <table class="tbl"><thead><tr><th>单号</th><th>类型</th><th>往来单位</th><th>经办</th><th>备注</th><th class="num">合计数量</th><th class="num">行数</th><th>时间</th><th style="width:320px">操作</th></tr></thead>
   <tbody>${res.rows.length ? res.rows.map(d => `<tr>
     <td class="mono"><a class="link" data-docid="${d.id}" title="点击查看该单据">${esc(d.doc_no)}</a></td>
     <td><span class="badge ${TYPE_META[d.type].c}">${TYPE_META[d.type].t}</span></td>
     <td>${esc(d.party || '—')}</td><td>${esc(d.operator || '—')}</td><td class="muted">${esc(d.remark || '—')}</td>
     <td class="num"><b>${d.type === 'count' ? '' : d.qty}</b></td><td class="num">${d.line_count}</td>
     <td class="muted">${fmtDT(d.created_at)}</td>
-    <td style="white-space:nowrap">
+    <td><div class="row-act">
         ${d.type !== 'count' ? `<button class="btn sm" data-act="flow" data-id="${d.id}" title="跨库流转：把该单推送到目标仓库，对方人工确认入账">流转</button>` : ''}
         <button class="btn sm" data-act="view" data-id="${d.id}">查看</button>
         <button class="btn sm" data-act="editx" data-id="${d.id}" title="导出并手工调整(日期/数量)">✎调整</button>
@@ -2632,7 +2695,7 @@ async function renderDocs(v) {
         ${d.type !== 'count' ? `<button class="btn sm ok" data-act="pdf" data-id="${d.id}">PDF</button>` : ''}
         <button class="btn sm" data-act="qr" data-id="${d.id}" title="二维码">QR</button>
         <button class="btn sm danger" data-act="revoke" data-id="${d.id}" title="回退该单库存/SN影响并删除">撤回</button>
-    </td>
+    </div></td>
   </tr>`).join('') : `<tr><td colspan="9"><div class="empty"><div class="big">🧾</div>暂无单据</div></td></tr>`}</tbody></table>
   </div>
   <div class="card-body row-flex" style="justify-content:flex-end;gap:8px">
@@ -2769,6 +2832,7 @@ async function viewDoc(id) {
   const lines = d.lines;
   const isCount = d.doc.type === 'count';
   modal({
+    cls: 'xwide',
     title: `${TYPE_META[d.doc.type].t}单 · ${d.doc.doc_no}`,
     body: `<dl class="dl" style="margin-bottom:12px">
       <dt>往来单位</dt><dd>${esc(d.doc.party || '—')}</dd><dt>经办人</dt><dd>${esc(d.doc.operator || '—')}</dd>
@@ -2981,7 +3045,7 @@ const ABOUT_CFG = {
     started: '2026-09',
     // 累计编写量：按本仓库开发会话记录文本估算（精确计费值取决于所用模型 / 账单，此处按本地记录估算）
     tokensEstimate: '1,181,464,440 tokens',
-    milestone: 'V0.0.0 → V0.10.11',
+    milestone: 'V0.0.0 → V0.10.12',
   },
 };
 // 【赞赏码】各版本自有的默认赞赏码**不放这里**，而是放在「程序目录 / edition.default.json」
@@ -4661,7 +4725,7 @@ async function renderInterlink(v, param) {
   try { await load(); }
   catch (e) { const tb = $('#il-body', v); if (tb) tb.innerHTML = `<tr><td colspan="8"><span class="badge red">读取失败：${esc(e.message)}</span></td></tr>`; }
 }
-const RENDER = { dashboard: renderDashboard, io: renderIo, count: renderCount, docs: renderDocs, skus: renderSkus, categories: renderCategories, stock: renderStock, sn: renderSn, interlink: renderInterlink, instruments: renderInstruments, medicines: renderMedicines, loans: renderLoans, office: renderOffice, flows: renderFlows, docdetail: renderDocDetail, templates: renderTemplates, settings: renderSettings };
+const RENDER = { dashboard: renderDashboard, io: renderIo, count: renderCount, docs: renderDocs, skus: renderSkus, categories: renderCategories, stock: renderStock, sn: renderSn, interlink: renderInterlink, instruments: renderInstruments, medicines: renderMedicines, damages: renderDamages, loans: renderLoans, office: renderOffice, flows: renderFlows, docdetail: renderDocDetail, templates: renderTemplates, settings: renderSettings };
 
 /* ============================================================
  * 专项台账：计量器具 / 药品 / 办公物资 / 物资借用
@@ -4775,22 +4839,22 @@ async function renderMedicines(v) {
   const fil = { q: '' };
   const paint = () => {
     const fq = fil.q.trim().toLowerCase();
-    const list = rows.filter(r => !fq || [r.name, r.source, r.code].some(x => String(x || '').toLowerCase().includes(fq)));
+    const list = rows.filter(r => !fq || [r.name, r.spec, r.source, r.code].some(x => String(x || '').toLowerCase().includes(fq)));
     $('#med-body', v).innerHTML = list.length ? list.map(r => `<tr>
-      <td><b>${esc(r.name)}</b></td><td>${esc(r.prod_date || '—')}</td><td>${expCell(r.expire_date)}</td>
+      <td><b>${esc(r.name)}</b></td><td class="muted">${esc(r.spec || '—')}</td><td>${esc(r.prod_date || '—')}</td><td>${expCell(r.expire_date)}</td>
       <td>${esc(r.in_date || '—')}</td><td>${esc(r.source || '—')}</td><td class="mono">${esc(r.code || '—')}</td>
       <td class="muted">${esc(r.remark || '')}</td>
       <td style="white-space:nowrap"><button class="btn sm" data-act="edit" data-id="${r.id}">编辑</button><button class="btn sm danger" data-act="del" data-id="${r.id}">删除</button></td></tr>`).join('')
-      : '<tr><td colspan="8"><div class="empty"><div class="big">💊</div>暂无药品，点击右上角「＋ 新增药品」登记。</div></td></tr>';
+      : '<tr><td colspan="9"><div class="empty"><div class="big">💊</div>暂无药品，点击右上角「＋ 新增药品」登记。</div></td></tr>';
   };
   v.innerHTML = `<div class="toolbar">
-    <input class="input" id="med-q" placeholder="搜索 药品名称 / 来源 / 追溯码" style="min-width:230px">
+    <input class="input" id="med-q" placeholder="搜索 药品名称 / 规格 / 来源 / 追溯码" style="min-width:230px">
     <div class="spacer"></div>
     <button class="btn" id="med-tpl">⬇ 导入模板</button>
     <button class="btn" id="med-imp">⬆ 按模板导入</button>
     <button class="btn primary" id="med-new">＋ 新增药品</button></div>
-    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>药品名称</th><th>生产日期</th><th>有效期</th><th>入库日期</th><th>药品来源</th><th>药品追溯码</th><th>备注</th><th style="width:150px">操作</th></tr></thead><tbody id="med-body"></tbody></table></div></div>
-    <div class="hint">到期前 90 天内首页会提示。支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记。</div>`;
+    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>药品名称</th><th>规格</th><th>生产日期</th><th>有效期</th><th>入库日期</th><th>药品来源</th><th>药品追溯码</th><th>备注</th><th style="width:150px">操作</th></tr></thead><tbody id="med-body"></tbody></table></div></div>
+    <div class="hint">到期前 90 天内首页会提示。支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记（规格列可填写包装/剂量规格，便于区分同名药品）。</div>`;
   paint();
   $('#med-q', v).oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#med-q', v).value; paint(); }, 200); }; })();
   $('#med-new', v).onclick = () => medicineModal(null, () => renderMedicines(v));
@@ -4806,6 +4870,7 @@ async function renderMedicines(v) {
 function medicineModal(item, after) {
   const { el, close } = modal({ title: item ? '编辑药品' : '新增药品', small: true,
     body: `<label class="field"><span class="lab">药品名称 *</span><input class="input" id="md-name" value="${esc(item ? item.name : '')}"></label>
+      <label class="field"><span class="lab">规格</span><input class="input" id="md-spec" value="${esc(item ? item.spec : '')}" placeholder="如 0.25g×24粒/盒"></label>
       <div class="split"><label class="field"><span class="lab">生产日期</span><input class="input" type="date" id="md-prod" value="${esc(item ? item.prod_date : '')}"></label>
       <label class="field"><span class="lab">有效期 *</span><input class="input" type="date" id="md-exp" value="${esc(item ? item.expire_date : '')}"></label></div>
       <div class="split"><label class="field"><span class="lab">入库日期</span><input class="input" type="date" id="md-in" value="${esc(item ? item.in_date : TODAY())}"></label>
@@ -4815,9 +4880,123 @@ function medicineModal(item, after) {
     foot: `<button class="btn" data-c>取消</button><button class="btn primary" id="md-save">保存</button>` });
   $$('[data-c]', el).forEach(x => x.onclick = close);
   $('#md-save', el).onclick = async () => {
-    const body = { name: $('#md-name', el).value.trim(), prod_date: $('#md-prod', el).value, expire_date: $('#md-exp', el).value, in_date: $('#md-in', el).value, source: $('#md-src', el).value.trim(), code: $('#md-code', el).value.trim(), remark: $('#md-rmk', el).value.trim() };
+    const body = { name: $('#md-name', el).value.trim(), spec: $('#md-spec', el).value.trim(), prod_date: $('#md-prod', el).value, expire_date: $('#md-exp', el).value, in_date: $('#md-in', el).value, source: $('#md-src', el).value.trim(), code: $('#md-code', el).value.trim(), remark: $('#md-rmk', el).value.trim() };
     if (!body.name) return toast('药品名称必填', 'err');
     try { await safeRun(() => api(item ? `/api/medicines/${item.id}` : '/api/medicines', { method: item ? 'PUT' : 'POST', body: JSON.stringify(body) })); toast('已保存'); close(); after && after(); } catch {}
+  };
+}
+
+/* ---- 坏件管理 damage：条目取自「物资管理」档案 ----
+ * 独立台账：只登记坏件与处理进度（待处理 → 维修中 → 已修复 → 已报废），
+ * 不生成单据、不影响库存与出入库流水（处置坏件请另行走出入库/盘库）。 */
+const DMG_META = { pending: ['待处理', 'orange'], repairing: ['维修中', 'cyan'], repaired: ['已修复', 'green'], scrapped: ['已报废', 'gray'] };
+const DMG_FLOW = ['pending', 'repairing', 'repaired', 'scrapped'];
+const dmgBadge = s => { const m = DMG_META[s] || DMG_META.pending; return `<span class="badge ${m[1]}">${m[0]}</span>`; };
+const dmgNext = s => DMG_FLOW[(Math.max(0, DMG_FLOW.indexOf(s)) + 1) % DMG_FLOW.length];
+async function renderDamages(v) {
+  const rows = await api('/api/damages').catch(() => []);
+  const locs = await locDispList();
+  const fil = { q: '', status: '' };
+  const paint = () => {
+    const fq = fil.q.trim().toLowerCase();
+    const list = rows.filter(r => (!fq || [r.sku_code, r.name, r.spec, r.location, r.sn, r.reason].some(x => String(x || '').toLowerCase().includes(fq)))
+      && (!fil.status || r.status === fil.status));
+    $('#dmg-fcnt', v).textContent = `共 ${list.length} / ${rows.length} 条`;
+    $('#dmg-body', v).innerHTML = list.length ? list.map(r => `<tr>
+      <td><b>${esc(r.name)}</b>${r.sku_code ? `<div class="muted" style="font-size:12px">${esc(r.sku_code)}</div>` : ''}</td>
+      <td class="muted">${esc(r.spec || '—')}</td>
+      <td>${esc(r.location || '—')}</td>
+      <td class="num">${r.qty || 0}${r.unit ? ' ' + esc(r.unit) : ''}</td>
+      <td class="mono">${esc(r.sn || '—')}</td>
+      <td>${esc(r.reason || '—')}</td>
+      <td>${dmgBadge(r.status)}</td>
+      <td class="muted">${esc(r.date || '—')}</td><td>${esc(r.operator || '—')}</td>
+      <td class="muted">${esc(r.remark || '')}</td>
+      <td><div class="row-act">
+        <button class="btn sm" data-act="edit" data-id="${r.id}">编辑</button>
+        <button class="btn sm primary" data-act="next" data-id="${r.id}" title="按下一条进度推进：待处理 → 维修中 → 已修复 → 已报废 → 待处理">进度</button>
+        <button class="btn sm danger" data-act="del" data-id="${r.id}">删除</button></div></td></tr>`).join('')
+      : '<tr><td colspan="11"><div class="empty"><div class="big">🔧</div>暂无坏件记录，点击右上角「＋ 登记坏件」（条目取自「物资管理」档案）。</div></td></tr>';
+  };
+  v.innerHTML = `<div class="toolbar">
+    <input class="input" id="dmg-q" placeholder="搜索 名称 / 规格 / 编码 / 库位 / SN / 原因" style="min-width:230px">
+    <select class="input" id="dmg-status" style="width:140px"><option value="">全部状态</option>${DMG_FLOW.map(s => `<option value="${s}">${DMG_META[s][0]}</option>`).join('')}</select>
+    <button class="btn sm ghost" id="dmg-fclear">重置筛选</button>
+    <span class="tag muted" id="dmg-fcnt"></span>
+    <div class="spacer"></div>
+    <button class="btn primary" id="dmg-new">＋ 登记坏件</button></div>
+    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>物资名称</th><th>规格</th><th>存放位置</th><th class="num">数量</th><th>序列号 / SN</th><th>坏件原因</th><th>状态</th><th>登记日期</th><th>经办人</th><th>备注</th><th style="width:200px">操作</th></tr></thead><tbody id="dmg-body"></tbody></table></div></div>
+    <div class="hint">坏件台账<b>条目取自「物资管理」档案</b>（名称 / 规格 / 单位 / 库位自动带出）；本页只登记坏件与处理进度，<b>不影响库存与出入库流水</b>。处置（报废出库 / 修复入库）请到「出入库」页正常开单，或用「盘库」核对实物。</div>`;
+  paint();
+  $('#dmg-q', v).oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#dmg-q', v).value; paint(); }, 200); }; })();
+  $('#dmg-status', v).onchange = e => { fil.status = e.target.value; paint(); };
+  $('#dmg-fclear', v).onclick = () => { fil.q = fil.status = ''; $('#dmg-q', v).value = ''; $('#dmg-status', v).value = ''; paint(); };
+  $('#dmg-new', v).onclick = () => damageModal(null, locs, () => renderDamages(v));
+  $('#dmg-body', v).addEventListener('click', e => {
+    const b = e.target.closest('button[data-act]'); if (!b) return;
+    const id = Number(b.dataset.id); const act = b.dataset.act; const r = rows.find(x => x.id === id);
+    if (act === 'edit') damageModal(r, locs, () => renderDamages(v));
+    else if (act === 'next') (async () => {
+      const to = dmgNext(r.status);
+      try { await safeRun(() => api(`/api/damages/${id}`, { method: 'PUT', body: JSON.stringify({ status: to }) })); toast(`「${r.name}」已标记为 ${DMG_META[to][0]}`); renderDamages(v); } catch {}
+    })();
+    else if (act === 'del') (async () => { if (await confirmBox(`删除坏件记录「${r.name}」？不可恢复（不会改动库存）。`, { danger: true, okText: '删除' })) { try { await safeRun(() => api(`/api/damages/${id}`, { method: 'DELETE' })); toast('已删除'); renderDamages(v); } catch {} } })();
+  });
+}
+async function damageModal(item, locs, after) {
+  let skus = []; try { skus = await getSkus(true); } catch {}
+  if (!skus.length) { toast('还没有物资，请先到「物资管理」建档', 'err'); return; }
+  const cur = item || {};
+  const { el, close } = modal({ title: item ? '编辑坏件记录' : '登记坏件', wide: true,
+    body: `<div class="hint" style="margin-bottom:8px">条目取自「物资管理」档案（名称 / 规格 / 单位 / 库位自动带出）；本台账<b>只登记坏件与处理进度，不影响库存与流水</b>。</div>
+      <div class="row-flex" style="gap:10px;flex-wrap:wrap">
+        <label style="width:330px"><span class="lab">物资 *</span>
+          <select class="input" id="dg-sku"><option value="">— 选择物资 —</option>${skus.map(x => `<option value="${x.id}" data-k="${esc(skuOptKey(x))}" ${cur.sku_id == x.id ? 'selected' : ''}>${esc(skuOptText(x))}</option>`).join('')}</select></label>
+        <label style="width:110px"><span class="lab">数量</span><input class="input num" type="number" min="0" id="dg-qty" value="${cur.qty != null ? cur.qty : 1}"></label>
+        <label style="width:170px"><span class="lab">登记日期</span><input class="input" type="date" id="dg-date" value="${esc(cur.date || TODAY())}"></label>
+        <label style="width:140px"><span class="lab">状态</span><select class="input" id="dg-status">${DMG_FLOW.map(s => `<option value="${s}" ${(cur.status || 'pending') === s ? 'selected' : ''}>${DMG_META[s][0]}</option>`).join('')}</select></label>
+      </div>
+      <div class="row-flex" style="gap:10px;flex-wrap:wrap;margin-top:8px">
+        <label class="grow" style="min-width:200px"><span class="lab">坏件原因</span><input class="input" id="dg-reason" value="${esc(cur.reason || '')}" placeholder="如 摔坏 / 进水 / 不通电"></label>
+        <label style="width:210px"><span class="lab">存放位置（坏件所在）</span><input class="input" id="dg-loc" list="dg-loc-list" value="${esc(cur.location || '')}"></label>
+        <label style="width:150px"><span class="lab">经办人</span><input class="input" id="dg-op" value="${esc(cur.operator || state.settings.default_operator || '')}"></label>
+      </div>
+      <label class="field"><span class="lab">序列号 / SN（可选，SN 管理物资建议填写；多个用换行或逗号分隔）</span><textarea class="input mono" id="dg-sn" rows="2">${esc(cur.sn || '')}</textarea></label>
+      <label class="field"><span class="lab">备注</span><input class="input" id="dg-rmk" value="${esc(cur.remark || '')}"></label>
+      <datalist id="dg-loc-list">${locs.map(l => `<option value="${esc(l)}"></option>`).join('')}</datalist>
+      <div class="hint" id="dg-info"></div>`,
+    foot: `<button class="btn" data-c>取消</button><button class="btn primary" id="dg-save">保存</button>` });
+  const sel = $('#dg-sku', el);
+  const paintInfo = () => {
+    const s = skus.find(x => String(x.id) === String(sel.value));
+    const box = $('#dg-info', el); if (!box) return;
+    box.innerHTML = s
+      ? `档案：规格 <b>${esc(s.spec || '—')}</b> · 单位 ${esc(s.unit || '—')} · 默认库位 ${esc(s.location || '—')} · 当前库存 <b>${s.sn_managed ? s.sn_in : s.qty}</b>${s.sn_managed ? '（SN 管理）' : ''}`
+      : '提示：没有合适的物资时，请先到「物资管理」建档（本页条目只能引用已有物资）。';
+  };
+  attachSkuSearch(sel, { placeholder: '🔍 输入编码 / 名称 / 规格 / 位置，自动列出匹配物资…' });
+  sel.onchange = () => {
+    const s = skus.find(x => String(x.id) === String(sel.value));
+    if (s) $('#dg-loc', el).value = s.location || '';
+    paintInfo();
+  };
+  paintInfo();
+  $$('[data-c]', el).forEach(x => x.onclick = close);
+  $('#dg-save', el).onclick = async () => {
+    const sid = Number(sel.value) || 0;
+    if (!sid && !item) return toast('请选择物资', 'err');
+    const body = {
+      qty: Number($('#dg-qty', el).value) || 0,
+      sn: $('#dg-sn', el).value.trim(),
+      reason: $('#dg-reason', el).value.trim(),
+      status: $('#dg-status', el).value,
+      location: $('#dg-loc', el).value.trim(),
+      operator: $('#dg-op', el).value.trim(),
+      date: $('#dg-date', el).value,
+      remark: $('#dg-rmk', el).value.trim(),
+    };
+    if (sid) body.sku_id = sid;
+    try { await safeRun(() => api(item ? `/api/damages/${item.id}` : '/api/damages', { method: item ? 'PUT' : 'POST', body: JSON.stringify(body) })); toast('已保存'); close(); after && after(); } catch {}
   };
 }
 
@@ -5022,8 +5201,8 @@ async function loanBorrowModal(after) {
         <div class="row-flex" style="align-items:flex-start;gap:10px">
           <div style="width:300px"><span class="lab">物资</span><select class="input" data-f="sku">
             <option value="">— 选择物资 —</option>
-            ${skus.map(x => `<option value="${x.id}" ${l.sku_id == x.id ? 'selected' : ''}>${esc(x.sku_code)}｜${esc(x.name)}${x.spec ? ' · ' + esc(x.spec) : ''}${x.sn_managed ? ' [SN]' : ''}</option>`).join('')}
-          </select>${s ? `<div class="hint">本库现况：<b>${s.sn_managed ? s.sn_in : s.qty}</b> ${esc(s.unit || '')}</div>` : ''}</div>
+            ${skus.map(x => `<option value="${x.id}" data-k="${esc(skuOptKey(x))}" ${l.sku_id == x.id ? 'selected' : ''}>${esc(skuOptText(x))}</option>`).join('')}
+          </select>${s ? `<div class="hint">本库现况：<b>${s.sn_managed ? s.sn_in : s.qty}</b> ${esc(s.unit || '')}${s.sn_managed ? ' · SN 管理' : ''}</div>` : ''}</div>
           ${isSn ? `<div class="grow"><span class="lab">${isBorrow ? '借入 SN（他方 SN，逐行）' : '借出 SN（在库，逐行）'}</span><textarea class="input mono" data-f="sntext" rows="3">${esc(l.snText)}</textarea>
             ${isBorrow ? '' : '<button class="btn sm" data-act="loadsn">读在库SN</button>'}</div>`
           : `<div style="width:130px"><span class="lab">数量</span><input class="input num" type="number" min="1" data-f="qty" value="${esc(l.qty)}"></div>`}
@@ -5034,7 +5213,7 @@ async function loanBorrowModal(after) {
       const i = Number(rowEl.dataset.i);
       const sel = rowEl.querySelector('[data-f=sku]');
       if (!sel || !lines[i]) return;
-      const box = attachSkuSearch(sel, { value: lines[i].skuQ || '', placeholder: '🔍 筛选物资（编码 / 名称 / 型号）' });
+      const box = attachSkuSearch(sel, { value: lines[i].skuQ || '', placeholder: '🔍 输入编码 / 名称 / 规格 / 位置，自动列出匹配物资…' });
       if (box) box.addEventListener('input', () => { lines[i].skuQ = box.value; });
     });
   };
@@ -5133,15 +5312,16 @@ async function loanReturn(loan, after) {
   const isBorrow = loan.kind === 'borrow';
   const { el, close } = modal({ title: isBorrow ? '归还他方（借入结清）' : '还入本库（借出结清）', small: true,
     body: `<div class="hint" style="margin-bottom:6px">${isBorrow ? '归还他方' : '还入本库'} <b>${esc(loan.name)}</b> × ${loan.qty} ${esc(loan.unit || '')}（对方 ${esc(loan.borrower)}，${isBorrow ? '借入' : '借出'}于 ${esc(loan.loan_date)}，已借 ${loan.days ?? '-'} 天）。</div>
-      <label class="field"><span class="lab">经办人</span><input class="input" id="lr-op" value="${esc(state.settings.default_operator || '')}"></label>
+      <div class="split"><label class="field"><span class="lab">归还日期</span><input class="input" type="date" id="lr-date" value="${TODAY()}"></label>
+      <label class="field"><span class="lab">经办人</span><input class="input" id="lr-op" value="${esc(state.settings.default_operator || '')}"></label></div>
       <label class="field"><span class="lab">备注（可选）</span><input class="input" id="lr-rmk" placeholder="归还状态等"></label>
-      <div class="hint">确认后将自动生成一张<b>${isBorrow ? '出库单' : '入库单'}</b>${isBorrow ? '，将该物资归还他方' : '，将该物资还入本库'}，并结清该记录。</div>`,
+      <div class="hint">确认后将自动生成一张<b>${isBorrow ? '出库单' : '入库单'}</b>${isBorrow ? '，将该物资归还他方' : '，将该物资还入本库'}，并结清该记录。归还日期支持<b>补录</b>：改成实际归还日期后，单据日期、单号里的日期段与结清日都会跟随它。</div>`,
     foot: `<button class="btn" data-c>取消</button><button class="btn primary" id="lr-go">${isBorrow ? '确认归还他方' : '确认还入本库'}</button>` });
   $$('[data-c]', el).forEach(x => x.onclick = close);
   $('#lr-go', el).onclick = async () => {
     try {
       const hide = loadingBox('办理归还中…');
-      let r; try { r = await api('/api/loans/return', { method: 'POST', body: JSON.stringify({ loan_ids: [loan.id], operator: $('#lr-op', el).value.trim(), location: state.settings.default_location || '', remark: $('#lr-rmk', el).value.trim() }) }); } finally { hide(); }
+      let r; try { r = await api('/api/loans/return', { method: 'POST', body: JSON.stringify({ loan_ids: [loan.id], date: $('#lr-date', el).value, operator: $('#lr-op', el).value.trim(), location: state.settings.default_location || '', remark: $('#lr-rmk', el).value.trim() }) }); } finally { hide(); }
       close(); toast(isBorrow ? `已归还他方，生成出库单 ${r.doc.doc_no}` : `已还入本库，生成入库单 ${r.doc.doc_no}`);
       after && after();
     } catch (e) { toast(e.message, 'err'); }
@@ -5170,10 +5350,11 @@ function runGlobalSearch() {
     docs: { go: r => viewDoc(Number(r.id)) },
     instruments: { go: () => show('instruments') },
     medicines: { go: () => show('medicines') },
+    damages: { go: () => show('damages') },
     office: { go: () => show('office') },
     loans: { go: () => show('loans') },
   };
-  const LABEL = { skus: '📦 物资', sn: '🔢 SN 序列号', docs: '🧾 单据', instruments: '📏 计量器具', medicines: '💊 药品', office: '🖨️ 办公物资', loans: '🔖 物资借用' };
+  const LABEL = { skus: '📦 物资', sn: '🔢 SN 序列号', docs: '🧾 单据', instruments: '📏 计量器具', medicines: '💊 药品', damages: '🔧 坏件', office: '🖨️ 办公物资', loans: '🔖 物资借用' };
   const { el, close } = modal({ title: '全局搜索', wide: true,
     body: `<div class="hint" style="margin-bottom:8px">关键词：<b>${esc(q)}</b>（含已启用互联仓库）</div><div id="gs-body"><div class="empty"><div class="big">🔍</div>搜索中…</div></div>`,
     foot: '<button class="btn" data-c>关闭</button>' });
@@ -5218,6 +5399,19 @@ function globalSearchInit() {
  * 更新日志（点击底部版本号弹出，不需单独页面）
  * ============================================================ */
 const CHANGELOG = [
+  {
+    ver: '0.10.12', title: '药品加规格 · 新增坏件管理 · 借用单签字与归还补录 · 修复赞赏码丢失', date: '2026-09',
+    items: [
+      '<b>药品管理新增「规格」列</b>：新增 / 编辑药品、按模板导入都支持填写规格（如 0.25g×24粒/盒），同名不同规格的药品一眼分开；搜索也能按规格查',
+      '<b>新增「坏件管理」</b>（专项台账）：从「物资管理」里选物资登记坏件（名称 / 规格 / 单位 / 库位自动带出），记录数量、SN、坏件原因与处理进度（待处理 → 维修中 → 已修复 → 已报废）。这是独立台账，<b>不影响库存与出入库流水</b>；报废 / 修复请照常开出入库单或用盘库核对',
+      '<b>出入库 / 借用表单里选物资更顺手</b>：搜索框输入关键词会<b>自动弹出候选列表</b>（↑↓ 选择、Enter 确认、Esc 清空），点一下即选中；候选条目统一显示「<b>物资编码|名称 · 规格（超 25 字截断） · 存放位置</b>」',
+      '<b>「单据流水」操作列加宽并允许换行</b>：按钮多的时候不再挤在一起，窄屏也能逐个点到',
+      '<b>归还物资可以选「归还日期」</b>：事后补录不再是问题——改成实际归还日期后，生成的（入库 / 出库）单日期、单号里的日期段与借用台账的结清日都会跟随它；日期填错也会被拦下',
+      '<b>借用单 PDF 增加签字位</b>：打印出来的借出 / 借入 / 归还单底部预留「经办人签字」「借用人（借入为借出方、归还时按归还人 / 接收方）签字」与日期横线，打印后可直接人工签字存档（普通出入库单不加）',
+      '<b>「查看」单据弹窗加宽</b>：底部一排按钮（二维码 / 出入库文件 / PDF / 打印 / 更正 / xlsx / 撤回等）不再被挤成两行或挤出弹窗',
+      '<b>修复：换版本的安装包覆盖升级后「赞赏支持」不再丢码</b>——以前如果本机还没有特化配置文件，装另一个版本的包会把包里的默认赞赏码写进去，把本机原有的顶掉（例如主体版的支付宝码被开源版默认值覆盖）。现在改为「文件即内容」：实际显示 = <b>安装目录 static/donate 里真实存在的赞赏码 ∪ 特化配置里的自定义项</b>，素材文件还在就不会丢；想彻底关闭赞赏块写 <span class="mono">"donate": []</span>（或删掉对应图片）即可',
+    ],
+  },
   {
     ver: '0.10.11', title: '修复撤回单据后重复单号 · 新增单据信息更正 · 搜索结果带存放位置', date: '2026-09',
     items: [

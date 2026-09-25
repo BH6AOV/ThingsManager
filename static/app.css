@@ -100,6 +100,14 @@ body {
 
 /* ---------- 物资下拉框搜索（物资多时快速定位） ---------- */
 .sku-search { margin-bottom: 4px; font-size: 12px; padding: 7px 10px; }
+/* 搜索框 + 自动展开的候选列表（候选条目：名称 · 规格(截断) · 存放位置） */
+.sku-sbox { position: relative; }
+.sku-sug { position: absolute; z-index: 30; top: 100%; left: 0; right: 0; max-height: 260px; overflow: auto;
+  background: var(--card); border: 1px solid var(--btn-bd-h); border-radius: 8px; box-shadow: var(--shadow); margin-top: 2px; }
+.sku-sug-item { padding: 7px 10px; font-size: 12px; cursor: pointer; border-bottom: 1px solid var(--divider); line-height: 1.45; }
+.sku-sug-item:last-child { border-bottom: 0; }
+.sku-sug-item:hover, .sku-sug-item.on { background: var(--hover); }
+.sku-sug-empty { padding: 8px 10px; font-size: 12px; color: var(--muted); }
 
 /* ---------- 单据二维码弹窗：给二维码足够的展示尺寸（原尺寸展示，不被裁切） ---------- */
 .modal.qr { max-width: 540px; max-height: 92vh; }
@@ -121,6 +129,9 @@ body {
 
 /* ---------- table ---------- */
 .tbl-wrap { overflow-x: auto; }
+/* 操作列里按钮多的时候允许换行（避免窄列把按钮挤到无法点击） */
+.row-act { display: flex; flex-wrap: wrap; gap: 6px; }
+.row-act .btn { white-space: nowrap; }
 table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .tbl th {
   text-align: left; padding: 9px 12px; background: #f7f9fc; color: var(--muted); font-weight: 600;
@@ -200,12 +211,14 @@ a.link:hover { text-decoration: underline; }
   display: flex; flex-direction: column;
 }
 .modal.wide { max-width: 980px; }
+/* 单据查看弹窗：底部按钮多，给足宽度（窄屏会自动退化为 calc(100% - 40px) / 全屏） */
+.modal.xwide { max-width: 1180px; }
 .modal.small { max-width: 460px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 20px; border-bottom: 1px solid var(--line); }
 .modal-head h2 { margin: 0; font-size: 16px; }
 .modal-head .x { border: 0; background: transparent; font-size: 20px; color: var(--muted); cursor: pointer; line-height: 1; }
 .modal-body { padding: 18px 20px; overflow-y: auto; min-height: 0; }
-.modal-foot { padding: 13px 20px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; background: #fbfcfe; border-radius: 0 0 16px 16px; }
+.modal-foot { padding: 13px 20px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; background: #fbfcfe; border-radius: 0 0 16px 16px; }
 
 /* ---------- toast ---------- */
 #toast-root { position: fixed; top: 18px; right: 18px; z-index: 99; display: flex; flex-direction: column; gap: 8px; }

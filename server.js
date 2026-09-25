@@ -21,7 +21,7 @@ const { spawnSync, spawn } = require('child_process');
 // 版本号（同步落点：package.json / package-lock.json(两处) / dist/windows/build/ThingsManager.iss(MyAppVer+VersionInfoVersion) /
 //  static/index.html(#ver-chip 与 ?v=) / static/app.js(CHANGELOG 首条 + milestone) / docs 两份）；
 // 规则：修订号 +0.0.1 = 修复与小改动；次版本号 +0.1.0 = 一批新功能 / 准备发版；未发版前的后续改动并入同一版本号不重复升位
-const APP_VERSION = '0.10.11';
+const APP_VERSION = '0.10.12';
 
 const ROOT = __dirname;
 // 运行配置（桌面/安装版使用）：存于安装目录 runtime.config.json —— dataDir 等。
@@ -110,6 +110,36 @@ const EDITION_KEYS = ['edition', 'app_name', 'short_name', 'logo', 'mail_footer'
  * 建议只写各版本之间真正有差异的键（如 donate 赞赏码、logo、update 更新源）；
  * 没写的键沿用程序内置默认（见 static/app.js 的 EDITION_DEF）；以 _ 开头的键忽略（仅供写说明）。 */
 const EDITION_DEFAULT_FILE = path.join(ROOT, 'edition.default.json');
+/* ---- 赞赏码：素材即内容（升级 / 交叉安装不会丢本机赞赏码）----
+ * 程序包只负责“带哪些素材”，edition.json 负责“自定义项”；两者取并集：
+ *   实际显示 = static/donate 下【真实存在的图片】 ∪ edition.json 的 donate
+ * 这样即使老版本（尚无 edition.json 的安装）被另一个版本的包覆盖升级，
+ * 只要安装目录里还留着原来的赞赏码素材（Inno 升级不会删旧文件），赞赏块就不会丢；
+ * 想彻底不显示赞赏块：在 edition.json 里写 donate: []（显式关闭，连素材也不显示）。 */
+const DONATE_DIR = path.join(ROOT, 'static', 'donate');
+const DONATE_NAME = {
+  'wechatcode.png': '微信赞赏', 'wechatcode.jpg': '微信赞赏', 'wechatcode.jpeg': '微信赞赏',
+  'alipaycode.jpg': '支付宝赞赏', 'alipaycode.png': '支付宝赞赏', 'alipaycode.jpeg': '支付宝赞赏',
+};
+const DONATE_ORDER = ['wechatcode.png', 'wechatcode.jpg', 'alipaycode.jpg', 'alipaycode.png'];
+function scanDonateFiles() {
+  let files = [];
+  try { files = fs.readdirSync(DONATE_DIR); } catch { return []; }   // 目录不存在（比如素材被裁掉的分发）
+  return files
+    .filter(f => /\.(png|jpe?g|gif|webp|svg)$/i.test(f))
+    .sort((a, b) => {
+      const ia = DONATE_ORDER.indexOf(a.toLowerCase()), ib = DONATE_ORDER.indexOf(b.toLowerCase());
+      if (ia !== ib) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);   // 常见顺序：微信在前、支付宝在后
+      return a.localeCompare(b);
+    })
+    .map(f => ({ name: DONATE_NAME[f.toLowerCase()] || f.replace(/\.[^.]+$/, ''), src: '/donate/' + f }));
+}
+function mergeDonate(cfg) {
+  if (Array.isArray(cfg) && !cfg.length) return [];                 // 显式空数组 = 关闭赞赏块
+  const own = (Array.isArray(cfg) ? cfg : []).filter(x => x && x.src);
+  const seen = new Set(own.map(x => String(x.src)));
+  return own.concat(scanDonateFiles().filter(f => !seen.has(f.src)));
+}
 function ensureEditionFile() {
   if (fs.existsSync(EDITION_FILE)) return false;   // 已存在 = 本机特化内容，绝不覆盖
   try {
@@ -117,6 +147,9 @@ function ensureEditionFile() {
     if (!src || typeof src !== 'object' || Array.isArray(src)) return false;
     const o = {};
     for (const k of EDITION_KEYS) if (src[k] !== undefined) o[k] = src[k];
+    // 赞赏码：写入时就把“安装目录里实际存在的素材”并进去（保证初始化结果与本机实际一致）
+    const d = mergeDonate(o.donate);
+    if (d.length) o.donate = d; else if (Array.isArray(o.donate)) o.donate = [];
     if (!Object.keys(o).length) return false;
     fs.writeFileSync(EDITION_FILE, JSON.stringify(o, null, 2));
     return true;
@@ -128,6 +161,8 @@ function readEdition() {
   try { o = JSON.parse(fs.readFileSync(EDITION_FILE, 'utf8')) || {}; } catch { o = {}; }
   const out = {};
   for (const k of EDITION_KEYS) if (o[k] !== undefined) out[k] = o[k];
+  // 赞赏码：与安装目录里实际存在的素材取并集（本机已有的赞赏码不会因换包装升级而消失）
+  out.donate = mergeDonate(o.donate);
   return out;
 }
 let EDITION = readEdition();
@@ -148,6 +183,7 @@ function editionInfo() {
     configured: Object.keys(EDITION).length > 0,
     initialized: EDITION_INITIALIZED,          // 本次启动是否刚由随包默认文件初始化
     default_file: EDITION_DEFAULT_FILE,        // 随包默认特化配置（升级时会被替换，属程序文件）
+    donate_files: scanDonateFiles(),           // 安装目录 static/donate 里实际存在的素材（赞赏块 = 这些素材 ∪ data.donate）
     data: EDITION,
     update: editionUpdate(),
   };
@@ -382,6 +418,7 @@ CREATE TABLE IF NOT EXISTS instruments(
 CREATE TABLE IF NOT EXISTS medicines(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
+  spec TEXT NOT NULL DEFAULT '',
   prod_date TEXT NOT NULL DEFAULT '',
   expire_date TEXT NOT NULL DEFAULT '',
   in_date TEXT NOT NULL DEFAULT '',
@@ -427,6 +464,24 @@ CREATE TABLE IF NOT EXISTS loans(
 CREATE INDEX IF NOT EXISTS idx_loans_status ON loans(status);
 CREATE INDEX IF NOT EXISTS idx_inst_exp ON instruments(expire_date);
 CREATE INDEX IF NOT EXISTS idx_med_exp ON medicines(expire_date);
+CREATE TABLE IF NOT EXISTS damaged_items(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sku_id INTEGER DEFAULT NULL,
+  sku_code TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  spec TEXT NOT NULL DEFAULT '',
+  unit TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  qty INTEGER NOT NULL DEFAULT 0,
+  sn TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  operator TEXT NOT NULL DEFAULT '',
+  date TEXT NOT NULL DEFAULT '',
+  remark TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dmg_status ON damaged_items(status);
 CREATE TABLE IF NOT EXISTS mail_logs(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   day TEXT NOT NULL DEFAULT '',
@@ -460,6 +515,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS drafts(
 ensureColumn('loans', 'kind', "TEXT NOT NULL DEFAULT 'lend'"); // lend=借出(本库→他方) / borrow=借入(他方→本库)
 ensureColumn('loans', 'remind_days', 'INTEGER'); // 每笔借用独立的“借期提醒天数”（用于超期/临期预警）
 ensureColumn('instruments', 'spec', "TEXT NOT NULL DEFAULT ''"); // 计量器具 型号/规格
+ensureColumn('medicines', 'spec', "TEXT NOT NULL DEFAULT ''"); // 药品 规格/包装规格
 // 开站导入的“冲红”台账：记录某张开站(期初)导入单新建了哪些 sku/category/location，
 // 撤回该期初单时据此回滚（仍有他处引用则保留）——会计意义上的“冲红”撤销整批导入。
 db.exec(`CREATE TABLE IF NOT EXISTS opening_imports(
@@ -486,7 +542,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS app_logs(
 );`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_app_logs_ts ON app_logs(ts);');
 const iInst = db.prepare('INSERT INTO instruments(name,serial_no,spec,location,status,last_date,expire_date,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
-const iMed = db.prepare('INSERT INTO medicines(name,prod_date,expire_date,in_date,source,code,remark,created_at) VALUES(?,?,?,?,?,?,?,?)');
+const iMed = db.prepare('INSERT INTO medicines(name,spec,prod_date,expire_date,in_date,source,code,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
+const iDmg = db.prepare('INSERT INTO damaged_items(sku_id,sku_code,name,spec,unit,location,qty,sn,reason,status,operator,date,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
 const iOff = db.prepare('INSERT INTO office_items(code,name,spec,unit,qty,category_id,location,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
 const iLoan = db.prepare('INSERT INTO loans(kind,doc_out_id,doc_in_id,borrower,contact,sku_id,sku_code,name,spec,unit,sn_managed,qty,sn,loan_date,due_date,remind_days,status,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
 const uLoanReturnLend = db.prepare("UPDATE loans SET status='returned', doc_in_id=?, return_date=? WHERE id=?"); // 借出结清：还入本库=入库单
@@ -1692,6 +1749,10 @@ const API_DOC_GROUPS = [
     ['POST', '/api/medicines', '新增药品'],
     ['PUT', '/api/medicines/:id', '修改药品'],
     ['DELETE', '/api/medicines/:id', '删除药品'],
+    ['GET', '/api/damages', '坏件台账列表（可按状态 / 关键词筛选）'],
+    ['POST', '/api/damages', '登记坏件（条目取物资管理档案，不影响库存）'],
+    ['PUT', '/api/damages/:id', '修改坏件记录（含状态：待处理 / 维修中 / 已修复 / 已报废）'],
+    ['DELETE', '/api/damages/:id', '删除坏件记录'],
     ['GET', '/api/office', '办公物资格账列表'],
     ['POST', '/api/office', '新增办公物资'],
     ['PUT', '/api/office/:id', '修改办公物资'],
@@ -2920,7 +2981,7 @@ app.post('/api/admin/reset', wrap((req, res) => {
 app.post('/api/admin/clear-data', wrap((req, res) => {
   if (!needAdmin(req, res)) return;
   tx(() => {
-    db.exec('DELETE FROM loans; DELETE FROM office_items; DELETE FROM medicines; DELETE FROM instruments; DELETE FROM serial_numbers; DELETE FROM document_lines; DELETE FROM documents; DELETE FROM skus; DELETE FROM categories; DELETE FROM locations; DELETE FROM peers; DELETE FROM drafts; DELETE FROM opening_imports;');
+    db.exec('DELETE FROM loans; DELETE FROM office_items; DELETE FROM medicines; DELETE FROM instruments; DELETE FROM damaged_items; DELETE FROM serial_numbers; DELETE FROM document_lines; DELETE FROM documents; DELETE FROM skus; DELETE FROM categories; DELETE FROM locations; DELETE FROM peers; DELETE FROM drafts; DELETE FROM opening_imports;');
   });
   ok(res, { ok: true });
 }));
@@ -2930,7 +2991,7 @@ app.post('/api/admin/factory-reset', asy(async (req, res) => {
   const confirm = String(((req.body || {}).confirm) || '').trim();
   if (confirm !== '恢复出厂设置') throw new Error('确认文本不正确，已取消');
   tx(() => {
-    db.exec('DELETE FROM sessions; DELETE FROM loans; DELETE FROM office_items; DELETE FROM medicines; DELETE FROM instruments; DELETE FROM serial_numbers; DELETE FROM document_lines; DELETE FROM documents; DELETE FROM skus; DELETE FROM categories; DELETE FROM locations; DELETE FROM peers; DELETE FROM users; DELETE FROM drafts; DELETE FROM opening_imports; DELETE FROM settings;');
+    db.exec('DELETE FROM sessions; DELETE FROM loans; DELETE FROM office_items; DELETE FROM medicines; DELETE FROM instruments; DELETE FROM damaged_items; DELETE FROM serial_numbers; DELETE FROM document_lines; DELETE FROM documents; DELETE FROM skus; DELETE FROM categories; DELETE FROM locations; DELETE FROM peers; DELETE FROM users; DELETE FROM drafts; DELETE FROM opening_imports; DELETE FROM settings;');
   });
   // 抹掉运行期模板与品牌素材，随后重建内置默认模板
   for (const f of fs.readdirSync(TPL_DIR)) { try { fs.unlinkSync(path.join(TPL_DIR, f)); } catch {} }
@@ -3992,6 +4053,7 @@ function fmtPdfRows(doc, lines) {
  * PDF 渲染核心：单据头信息 + 已展开的明细行 -> PDF Buffer
  * rows: [{ sku_code, name, spec, unit, qty, sn, location }]
  * opt.qr：已编码的二维码载荷；不传则不绘制二维码
+ * opt.signs：[{label,value}] 底部签字位（借用单：经办人 / 借用人 等，打印后人工签字）
  */
 function renderDocPdfCore(docLike, rows, opt) {
   const o = opt || {};
@@ -4075,15 +4137,40 @@ function renderDocPdfCore(docLike, rows, opt) {
       dd.font('cjk').fontSize(9).fillColor('#111');
       dd.text(`合计：${rows.length} 行 / ${total} 件`, ML, y2 + 6);
       dd.text(`制单人：${docLike.operator || '—'}`, ML, y2 + 20);
+      // 借用单：底部预留签字位（打印后由经办人 / 借用人等人工签字，作为借用凭据）
+      const signs = o.signs || [];
+      if (signs.length) {
+        let sy = y2 + 50;
+        if (sy + 44 > PH - 40) { dd.addPage(); sy = 46; }   // 本页放不下就换页，避免签字位压到页脚外
+        const colW = Math.floor(avail / signs.length);
+        signs.forEach((it, i) => {
+          const x = ML + i * colW;
+          const lineY = sy + 17;
+          dd.font('cjk').fontSize(10).fillColor('#111').text(`${it.label}签字：`, x, sy, { width: colW - 20, lineBreak: false });
+          dd.moveTo(x, lineY).lineTo(x + colW - 30, lineY).lineWidth(0.6).strokeColor('#333').stroke();
+          dd.font('cjk').fontSize(9).fillColor('#666').text('日期：      年    月    日', x, lineY + 7, { width: colW - 20, lineBreak: false });
+        });
+      }
       dd.end();
     };
     if (o.qr) qrPng(o.qr, 160).then(draw).catch(reject);
     else draw(null);
   });
 }
+// 单据是否属于“物资借用”（借出 / 借入 的开立单或归还单）——借用单 PDF 需要签字位
+function loanOfDoc(docId) { return sget('SELECT * FROM loans WHERE doc_out_id=? OR doc_in_id=? ORDER BY id DESC LIMIT 1', Number(docId), Number(docId)) || null; }
+// 借用单的签字位：借出=经办人+借用人，借入=经办人+借出方；归还单按角色显示（归还人 / 接收方）
+function loanSignItems(doc) {
+  const ln = loanOfDoc(doc.id);
+  if (!ln) return [];
+  const isLend = ln.kind !== 'borrow';
+  const isIssue = isLend ? Number(ln.doc_out_id) === Number(doc.id) : Number(ln.doc_in_id) === Number(doc.id);   // 开立单 / 归还单
+  const second = isIssue ? (isLend ? '借用人' : '借出方') : (isLend ? '归还人' : '接收方');
+  return [{ label: '经办人' }, { label: second }];
+}
 function renderDocPdf(doc, lines) {
   const pl = docImportPayload(doc, lines);
-  return renderDocPdfCore(doc, fmtPdfRows(doc, lines), { qr: payloadEncode(pl) });
+  return renderDocPdfCore(doc, fmtPdfRows(doc, lines), { qr: payloadEncode(pl), signs: loanSignItems(doc) });
 }
 app.get('/api/export/docs/:id/pdf', asy(async (req, res) => {
   const doc = sget('SELECT * FROM documents WHERE id=?', Number(req.params.id));
@@ -4503,6 +4590,7 @@ const IMP_SPECS = {
     label: '药品', file: '药品导入模板.xlsx',
     fields: [
       { key: 'name', label: '药品名称', required: true, aliases: ['药品名称', '名称'] },
+      { key: 'spec', label: '规格', aliases: ['规格', '规格型号', '型号', '包装规格'] },
       { key: 'code', label: '追溯码/编码', aliases: ['追溯码/编码', '追溯码', '药品追溯码', '药品编码', '编码', '条码'] },
       { key: 'source', label: '来源', aliases: ['来源', '药品来源', '供应商', '厂家'] },
       { key: 'prod_date', label: '生产日期', type: 'date', aliases: ['生产日期'] },
@@ -4683,7 +4771,7 @@ app.post('/api/import/:kind/xlsx/confirm', wrap((req, res) => {
       if (kind === 'instruments') {
         iInst.run(name, S('serial_no'), S('spec'), S('location'), (r0.status === 'sealed' ? 'sealed' : 'active'), D('last_date'), D('expire_date'), S('remark'), now());
       } else if (kind === 'medicines') {
-        iMed.run(name, D('prod_date'), D('expire_date'), D('in_date'), S('source'), S('code'), S('remark'), now());
+        iMed.run(name, S('spec'), D('prod_date'), D('expire_date'), D('in_date'), S('source'), S('code'), S('remark'), now());
       } else if (kind === 'office') {
         const ri = iOff.run(S('code'), name, S('spec'), S('unit'), parseInt(r0.qty, 10) || 0, catIdOf(r0.category), S('location'), S('remark'), now());
         if (r0.status === 0) db.prepare('UPDATE office_items SET status=0 WHERE id=?').run(Number(ri.lastInsertRowid));
@@ -4745,25 +4833,87 @@ app.delete('/api/instruments/:id', wrap((req, res) => { db.prepare('DELETE FROM 
 /* ---- 药品 medicines ---- */
 app.get('/api/medicines', wrap((req, res) => {
   const q = (req.query.q || '').trim(); const cond = []; const args = [];
-  if (q) { cond.push('(name LIKE ? OR source LIKE ? OR code LIKE ?)'); const l = `%${q}%`; args.push(l, l, l); }
+  if (q) { cond.push('(name LIKE ? OR spec LIKE ? OR source LIKE ? OR code LIKE ?)'); const l = `%${q}%`; args.push(l, l, l, l); }
   const w = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
   ok(res, sall(`SELECT * FROM medicines ${w} ORDER BY expire_date, id DESC`, ...args));
 }));
 app.post('/api/medicines', wrap((req, res) => {
   const b = req.body || {}; const name = String(b.name || '').trim(); if (!name) throw new Error('药品名称必填');
   const d = k => (isValidDate(b[k]) ? String(b[k]).slice(0, 10) : '');
-  const r = iMed.run(name, d('prod_date'), d('expire_date'), d('in_date'), String(b.source || '').trim(), String(b.code || '').trim(), String(b.remark || '').trim(), now());
+  const r = iMed.run(name, String(b.spec || '').trim(), d('prod_date'), d('expire_date'), d('in_date'), String(b.source || '').trim(), String(b.code || '').trim(), String(b.remark || '').trim(), now());
   ok(res, sget('SELECT * FROM medicines WHERE id=?', Number(r.lastInsertRowid)));
 }));
 app.put('/api/medicines/:id', wrap((req, res) => {
   const id = Number(req.params.id); const c = sget('SELECT * FROM medicines WHERE id=?', id); if (!c) throw new Error('记录不存在');
   const b = req.body || {}; const name = String(b.name ?? c.name).trim(); if (!name) throw new Error('药品名称必填');
   const d = (k, fb) => (isValidDate(b[k]) ? String(b[k]).slice(0, 10) : (fb || ''));
-  db.prepare('UPDATE medicines SET name=?, prod_date=?, expire_date=?, in_date=?, source=?, code=?, remark=? WHERE id=?')
-    .run(name, d('prod_date', c.prod_date), d('expire_date', c.expire_date), d('in_date', c.in_date), String(b.source ?? c.source).trim(), String(b.code ?? c.code).trim(), String(b.remark ?? c.remark).trim(), id);
+  db.prepare('UPDATE medicines SET name=?, spec=?, prod_date=?, expire_date=?, in_date=?, source=?, code=?, remark=? WHERE id=?')
+    .run(name, String(b.spec ?? c.spec).trim(), d('prod_date', c.prod_date), d('expire_date', c.expire_date), d('in_date', c.in_date), String(b.source ?? c.source).trim(), String(b.code ?? c.code).trim(), String(b.remark ?? c.remark).trim(), id);
   ok(res, sget('SELECT * FROM medicines WHERE id=?', id));
 }));
 app.delete('/api/medicines/:id', wrap((req, res) => { db.prepare('DELETE FROM medicines WHERE id=?').run(Number(req.params.id)); ok(res, { ok: true }); }));
+
+/* ---- 坏件管理 damaged_items（独立台账：登记坏件 / 维修进度，不影响库存与流水）---- */
+const DMG_STATUS = ['pending', 'repairing', 'repaired', 'scrapped'];
+const DMG_STATUS_CN = { pending: '待处理', repairing: '维修中', repaired: '已修复', scrapped: '已报废' };
+const dmgStatusOf = s => (DMG_STATUS.includes(String(s || '')) ? String(s) : 'pending');
+app.get('/api/damages', wrap((req, res) => {
+  const q = (req.query.q || '').trim(); const st = (req.query.status || '').trim();
+  const cond = []; const args = [];
+  if (st) { cond.push('status=?'); args.push(dmgStatusOf(st)); }
+  if (q) { cond.push('(name LIKE ? OR spec LIKE ? OR sku_code LIKE ? OR location LIKE ? OR reason LIKE ? OR sn LIKE ?)'); const l = `%${q}%`; args.push(l, l, l, l, l, l); }
+  const w = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+  ok(res, sall(`SELECT * FROM damaged_items ${w} ORDER BY id DESC`, ...args));
+}));
+app.post('/api/damages', wrap((req, res) => {
+  const b = req.body || {};
+  const sku = b.sku_id ? sget('SELECT * FROM skus WHERE id=?', Number(b.sku_id)) : null;
+  if (b.sku_id && !sku) throw new Error('该物资不存在');
+  const name = String(b.name || (sku ? sku.name : '')).trim();
+  if (!name) throw new Error('请选择物资');
+  const r = iDmg.run(
+    sku ? sku.id : null,
+    String(sku ? sku.sku_code : b.sku_code || '').trim(),
+    name,
+    String(b.spec !== undefined ? b.spec : (sku ? sku.spec : '')).trim(),
+    String(b.unit !== undefined ? b.unit : (sku ? sku.unit : '')).trim(),
+    String(b.location !== undefined ? b.location : (sku ? sku.location : '')).trim(),
+    Math.max(0, parseInt(b.qty, 10) || 0),
+    String(b.sn || '').trim(),
+    String(b.reason || '').trim(),
+    dmgStatusOf(b.status),
+    String(b.operator || '').trim(),
+    isValidDate(b.date) ? String(b.date).slice(0, 10) : today(),
+    String(b.remark || '').trim(),
+    now());
+  ok(res, sget('SELECT * FROM damaged_items WHERE id=?', Number(r.lastInsertRowid)));
+}));
+app.put('/api/damages/:id', wrap((req, res) => {
+  const id = Number(req.params.id); const c = sget('SELECT * FROM damaged_items WHERE id=?', id); if (!c) throw new Error('记录不存在');
+  const b = req.body || {};
+  let sku = null;
+  if (b.sku_id !== undefined && Number(b.sku_id) !== Number(c.sku_id || 0)) { sku = b.sku_id ? sget('SELECT * FROM skus WHERE id=?', Number(b.sku_id)) : null; if (b.sku_id && !sku) throw new Error('该物资不存在'); }
+  const name = String(b.name ?? (sku ? sku.name : c.name)).trim();
+  if (!name) throw new Error('请选择物资');
+  db.prepare('UPDATE damaged_items SET sku_id=?, sku_code=?, name=?, spec=?, unit=?, location=?, qty=?, sn=?, reason=?, status=?, operator=?, date=?, remark=? WHERE id=?')
+    .run(
+      sku ? sku.id : (b.sku_id !== undefined ? (b.sku_id ? Number(b.sku_id) : null) : c.sku_id),
+      String(b.sku_code !== undefined ? b.sku_code : (sku ? sku.sku_code : c.sku_code)).trim(),
+      name,
+      String(b.spec !== undefined ? b.spec : (sku ? sku.spec : c.spec)).trim(),
+      String(b.unit !== undefined ? b.unit : (sku ? sku.unit : c.unit)).trim(),
+      String(b.location !== undefined ? b.location : (sku ? sku.location : c.location)).trim(),
+      Math.max(0, parseInt(b.qty !== undefined ? b.qty : c.qty, 10) || 0),
+      String(b.sn ?? c.sn).trim(),
+      String(b.reason ?? c.reason).trim(),
+      dmgStatusOf(b.status !== undefined ? b.status : c.status),
+      String(b.operator ?? c.operator).trim(),
+      isValidDate(b.date) ? String(b.date).slice(0, 10) : (b.date !== undefined ? '' : c.date),
+      String(b.remark ?? c.remark).trim(),
+      id);
+  ok(res, sget('SELECT * FROM damaged_items WHERE id=?', id));
+}));
+app.delete('/api/damages/:id', wrap((req, res) => { db.prepare('DELETE FROM damaged_items WHERE id=?').run(Number(req.params.id)); ok(res, { ok: true }); }));
 
 /* ---- 办公物资 office_items（独立台账，比照物资管理）---- */
 const OFFICE_SELECT = `SELECT o.*, c.name AS category_name FROM office_items o LEFT JOIN categories c ON c.id=o.category_id`;
@@ -4942,6 +5092,12 @@ app.post('/api/loans/return', wrap((req, res) => {
   const operator = String(b.operator || '').trim() || getSetting('default_operator', '');
   const location = String(b.location || '').trim() || getSetting('default_location', '');
   const remark = String(b.remark || '').trim() || '物资归还';
+  // 归还日期（事后补录用）：可选 YYYY-MM-DD，留空 = 今天。
+  // 它同时决定：关联单据的日期（created_at 的日期部分）、单号里的日期段、以及借用台账的结清日。
+  const dayRaw = String(b.date || '').trim();
+  if (dayRaw && !validYmd(dayRaw)) throw new Error('归还日期格式不正确（应为 YYYY-MM-DD）');
+  const day = validYmd(dayRaw);
+  const createdAt = day ? (day + ' ' + now().slice(11)) : now();
   const docs = [];
   // ---- 借出结清 → 还入本库：入库单（SN 回库 / 数量补回）----
   const lendRows = rows.filter(r => r.kind !== 'borrow');
@@ -4954,8 +5110,8 @@ app.post('/api/loans/return', wrap((req, res) => {
       else g.qty += Number(L.qty) || 0;
     }
     docs.push(tx(() => {
-      const docNo = nextDocNo('in');
-      const ri = iDoc.run('in', docNo, lendRows[0].borrower, operator, location, '还入｜' + remark, now());
+      const docNo = nextDocNo('in', day);
+      const ri = iDoc.run('in', docNo, lendRows[0].borrower, operator, location, '还入｜' + remark, createdAt);
       const docId = Number(ri.lastInsertRowid);
       for (const g of bySku.values()) {
         const sku = skuById(g.sku_id); if (!sku) throw new Error('借用记录对应的物资已不存在');
@@ -4972,7 +5128,7 @@ app.post('/api/loans/return', wrap((req, res) => {
           iLine.run(docId, sku.id, sku.sku_code, sku.name, sku.spec, sku.unit, 0, 0, n, '', '还入', sku.location || '');
         }
       }
-      for (const L of lendRows) uLoanReturnLend.run(docId, today(), L.id);
+      for (const L of lendRows) uLoanReturnLend.run(docId, day || today(), L.id);
       return sget('SELECT * FROM documents WHERE id=?', docId);
     }));
   }
@@ -4988,8 +5144,8 @@ app.post('/api/loans/return', wrap((req, res) => {
     }
     const stock = stockMap();
     docs.push(tx(() => {
-      const docNo = nextDocNo('out');
-      const ri = iDoc.run('out', docNo, borrowRows[0].borrower, operator, location, '归还他方｜' + remark, now());
+      const docNo = nextDocNo('out', day);
+      const ri = iDoc.run('out', docNo, borrowRows[0].borrower, operator, location, '归还他方｜' + remark, createdAt);
       const docId = Number(ri.lastInsertRowid);
       for (const g of bySku.values()) {
         const sku = skuById(g.sku_id); if (!sku) throw new Error('借用记录对应的物资已不存在');
@@ -5008,7 +5164,7 @@ app.post('/api/loans/return', wrap((req, res) => {
           iLine.run(docId, sku.id, sku.sku_code, sku.name, sku.spec, sku.unit, 0, 0, -n, '', '借入归还', sku.location || '');
         }
       }
-      for (const L of borrowRows) uLoanReturnBorrow.run(docId, today(), L.id);
+      for (const L of borrowRows) uLoanReturnBorrow.run(docId, day || today(), L.id);
       return sget('SELECT * FROM documents WHERE id=?', docId);
     }));
   }
@@ -5427,7 +5583,8 @@ app.get('/api/search', asy(async (req, res) => {
   const DL = { in: '入库', out: '出库', count: '盘库' };
   push('docs', '单据', sall('SELECT * FROM documents WHERE doc_no LIKE ? OR party LIKE ? OR operator LIKE ? ORDER BY id DESC LIMIT 15', like, like, like).map(r => m(r, r.doc_no, DL[r.type] || r.type, [(r.party || ''), (r.operator || ''), dateOf(r.created_at)].filter(Boolean).join(' · '))));
   push('instruments', '计量器具', sall('SELECT * FROM instruments WHERE name LIKE ? OR serial_no LIKE ? OR location LIKE ? ORDER BY expire_date LIMIT 15', like, like, like).map(r => m(r, r.serial_no, r.name, [r.location, r.expire_date ? '到期 ' + r.expire_date : '', r.status === 'sealed' ? '封存' : '在用'].filter(Boolean).join(' · '))));
-  push('medicines', '药品', sall('SELECT * FROM medicines WHERE name LIKE ? OR source LIKE ? OR code LIKE ? ORDER BY expire_date LIMIT 15', like, like, like).map(r => m(r, r.code, r.name, [r.source, r.expire_date ? '有效期 ' + r.expire_date : ''].filter(Boolean).join(' · '))));
+  push('medicines', '药品', sall('SELECT * FROM medicines WHERE name LIKE ? OR spec LIKE ? OR source LIKE ? OR code LIKE ? ORDER BY expire_date LIMIT 15', like, like, like, like).map(r => m(r, r.code, r.name, [r.spec, r.source, r.expire_date ? '有效期 ' + r.expire_date : ''].filter(Boolean).join(' · '))));
+  push('damages', '坏件', sall('SELECT * FROM damaged_items WHERE name LIKE ? OR spec LIKE ? OR sku_code LIKE ? OR reason LIKE ? OR location LIKE ? ORDER BY id DESC LIMIT 15', like, like, like, like, like).map(r => m(r, r.sku_code, r.name, [r.spec, r.location, '数量 ' + (r.qty || 0), DMG_STATUS_CN[r.status] || r.status, r.reason].filter(Boolean).join(' · '))));
   push('office', '办公物资', sall("SELECT o.id,o.code,o.name,o.spec,o.unit,o.qty,o.location,c.name category_name FROM office_items o LEFT JOIN categories c ON c.id=o.category_id WHERE o.code LIKE ? OR o.name LIKE ? OR o.spec LIKE ? ORDER BY o.code LIMIT 15", like, like, like).map(r => m(r, r.code, r.name, [r.category_name, r.location, r.spec, '数量 ' + (r.qty || 0)].filter(Boolean).join(' · '))));
   push('loans', '物资借用', sall("SELECT l.id,l.borrower,l.sku_code,l.name,l.qty,l.unit,l.loan_date,l.status,sk.location FROM loans l LEFT JOIN skus sk ON sk.id=l.sku_id WHERE l.borrower LIKE ? OR l.sku_code LIKE ? OR l.name LIKE ? ORDER BY l.id DESC LIMIT 15", like, like, like).map(r => m(r, r.name, r.borrower, [r.sku_code + ' ×' + r.qty + (r.unit || ''), r.location, (r.status === 'out' ? '在借' : '已还'), '借 ' + r.loan_date].filter(Boolean).join(' · '))));
   // 互联仓库：并发查对端物资表后按关键词过滤（仅显示对端名称，不暴露令牌）
