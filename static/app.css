@@ -596,6 +596,13 @@ table.tbl tr.al-soon7 td { background: rgba(255, 193, 7, .16); }
 [data-theme="dark"] table.tbl tr.al-over td { background: rgba(220, 53, 69, .14); }
 [data-theme="dark"] table.tbl tr.al-soon3 td { background: rgba(253, 126, 20, .16); }
 [data-theme="dark"] table.tbl tr.al-soon7 td { background: rgba(255, 193, 7, .18); }
+/* ===== 全局搜索定位：目标条目高亮闪烁 3 秒（6 次 × 0.5s；表格行闪烁单元格底色） ===== */
+@keyframes hitFlash { 0%, 100% { background-color: rgba(255, 214, 10, 0); } 50% { background-color: rgba(255, 214, 10, .60); } }
+.hit-flash { animation: hitFlash .5s ease-in-out 6; }
+.hit-flash > td { animation: hitFlash .5s ease-in-out 6; }
+@keyframes hitFlashDark { 0%, 100% { background-color: rgba(255, 214, 10, 0); } 50% { background-color: rgba(255, 214, 10, .26); } }
+[data-theme="dark"] .hit-flash { animation-name: hitFlashDark; }
+[data-theme="dark"] .hit-flash > td { animation-name: hitFlashDark; }
 
 /* ============================================================
  * v5.1 视图切换过渡（简单淡入 + 轻微上移，由 app.js show() 触发 .anim）

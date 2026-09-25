@@ -1,6 +1,6 @@
 {
   "name": "thingsmanager",
-  "version": "0.10.15",
+  "version": "0.10.16",
   "license": "AGPL-3.0-or-later",
   "private": true,
   "description": "轻量 Web 仓库管理：出入库/盘库/清单 xlsx 模板导出 + 可选 SN 管理（SQLite，最小后端）",

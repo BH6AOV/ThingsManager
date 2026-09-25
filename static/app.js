@@ -368,6 +368,9 @@ function skuOptText(x) {
   const parts = [String(x.name == null ? '' : x.name).trim()].filter(Boolean);
   const sp = skuSpecText(x.spec, 25); if (sp) parts.push(sp);
   const batch = String(x.med_batch == null ? '' : x.med_batch).trim(); if (batch) parts.push('批号 ' + skuSpecText(batch, 20));
+  // 药品隐藏档案额外带单位（盒 / 瓶 / 支…），出入库选药时一眼看到单位
+  const unit = String(x.unit == null ? '' : x.unit).trim();
+  if (unit && String(x.kind || '') === 'med') parts.push(unit);
   const loc = String(x.location == null ? '' : x.location).trim(); if (loc) parts.push(loc);
   if (String(x.kind || '') === 'med') parts.push('药品');
   const rest = parts.join(' · ');
@@ -1181,7 +1184,7 @@ async function renderSkus(v, param) {
     $('#sku-tbody').innerHTML = list.length ? list.map(s => {
       const st = stockMap.get(s.id);
       const qty = st ? (s.sn_managed ? (st.sn_in ?? st.qty) : st.qty) : '—';
-      return `<tr>${bmode ? `<td><input type="checkbox" class="sku-b-cb" data-id="${s.id}" ${bsel.has(s.id) ? 'checked' : ''}></td>` : ''}
+      return `<tr data-id="${s.id}">${bmode ? `<td><input type="checkbox" class="sku-b-cb" data-id="${s.id}" ${bsel.has(s.id) ? 'checked' : ''}></td>` : ''}
         <td class="mono">${esc(s.sku_code)}</td><td><a class="link" data-act="detail" data-id="${s.id}" title="查看物资详情">${esc(s.name)}</a></td><td class="muted">${esc(s.spec || '—')}</td>
         <td>${s.category_name ? `<span class="badge blue">${esc(s.category_name)}</span>` : '—'}</td>
         <td class="num">${qty}</td>
@@ -1598,6 +1601,7 @@ function today() { const d = new Date(); const p = n => String(n).padStart(2, '0
 async function renderSn(v, param) {
   const skus = await getSkus();
   const filter = { q: '', status: '', sku_id: param && param.sku_id ? param.sku_id : '' };
+  if (param && param.locate) filter.q = String(param.locate);   // 从全局搜索跳入：按 SN 定位
   const sel = new Set();
   let cur = [];
   const paintSelBar = () => {
@@ -1617,7 +1621,7 @@ async function renderSn(v, param) {
     const ids = new Set(rows.map(r => r.id));
     for (const id of [...sel]) if (!ids.has(id)) sel.delete(id);
     const allEl = $('#sn-selall'); if (allEl) allEl.checked = rows.length > 0 && rows.every(r => sel.has(r.id));
-    $('#sn-body').innerHTML = rows.length ? rows.map(r => `<tr class="${sel.has(r.id) ? 'row-sel' : ''}">
+    $('#sn-body').innerHTML = rows.length ? rows.map(r => `<tr data-id="${r.id}" class="${sel.has(r.id) ? 'row-sel' : ''}">
       <td><input type="checkbox" class="sn-cb" data-id="${r.id}" ${sel.has(r.id) ? 'checked' : ''}></td>
       <td class="mono">${esc(r.sku_code)}</td><td>${esc(r.name)}</td><td class="mono">${esc(r.sn)}</td>
       <td><span class="badge ${r.status === 'in' ? 'green' : 'gray'}">${r.status === 'in' ? '在库' : '已出'}</span></td>
@@ -1636,7 +1640,7 @@ async function renderSn(v, param) {
   };
   v.innerHTML = `
   <div class="toolbar">
-    <input class="input" id="sn-q" placeholder="搜索 SN / 编码 / 名称" style="min-width:230px" />
+    <input class="input" id="sn-q" placeholder="搜索 SN / 编码 / 名称" style="min-width:230px" value="${esc(filter.q)}" />
     <select class="input" id="sn-status" style="width:110px">
       <option value="">全部状态</option><option value="in">在库</option><option value="out">已出库</option>
     </select>
@@ -2824,7 +2828,9 @@ async function renderCount(v, param) {
  * 视图：单据流水
  * ============================================================ */
 let docPage = { type: '', q: '', p: 1, dateFrom: '', dateTo: '' };
-async function renderDocs(v) {
+async function renderDocs(v, param) {
+  // 从全局搜索跳入：按单号定位（同时清掉类型 / 时间筛选与页码，保证目标行一定在当前列表里）
+  if (param && param.locate) { docPage.type = ''; docPage.q = String(param.locate); docPage.dateFrom = ''; docPage.dateTo = ''; docPage.p = 1; }
   const params = new URLSearchParams();
   if (docPage.type) params.set('type', docPage.type);
   if (docPage.q) params.set('q', docPage.q);
@@ -2853,7 +2859,7 @@ async function renderDocs(v) {
   </div>
   <div class="card"><div class="tbl-wrap">
   <table class="tbl"><thead><tr><th>单号</th><th>类型</th><th>往来单位</th><th>经办</th><th>备注</th><th class="num">合计数量</th><th class="num">行数</th><th>时间</th><th style="width:320px">操作</th></tr></thead>
-  <tbody>${res.rows.length ? res.rows.map(d => `<tr>
+  <tbody>${res.rows.length ? res.rows.map(d => `<tr data-id="${d.id}">
     <td class="mono"><a class="link" data-docid="${d.id}" title="点击查看该单据">${esc(d.doc_no)}</a></td>
     <td><span class="badge ${TYPE_META[d.type].c}">${TYPE_META[d.type].t}</span></td>
     <td>${esc(d.party || '—')}</td><td>${esc(d.operator || '—')}</td><td class="muted">${esc(d.remark || '—')}</td>
@@ -3218,7 +3224,7 @@ const ABOUT_CFG = {
     started: '2026-09',
     // 累计编写量：按本仓库开发会话记录文本估算（精确计费值取决于所用模型 / 账单，此处按本地记录估算）
     tokensEstimate: '1,181,464,440 tokens',
-    milestone: 'V0.0.0 → V0.10.15',
+    milestone: 'V0.0.0 → V0.10.16',
   },
 };
 // 【赞赏码】各版本自有的默认赞赏码**不放这里**，而是放在「程序目录 / edition.default.json」
@@ -4833,6 +4839,7 @@ async function renderInterlink(v, param) {
   let cur = peers.find(p => p.id === Number(param && param.peer)) || peers[0];
   let all = [];
   const fil = { q: '', cat: '', loc: '', unit: '' };
+  if (param && param.locate) fil.q = String(param.locate);   // 从全局搜索跳入：按物资编码定位
   const uni = arr => [...new Set(arr.map(x => String(x == null ? '' : x).trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh'));
   const syncOpt = (selId, filKey, rowField, emptyLabel) => {
     const s = $('#il-' + selId, v); if (!s) return;
@@ -4858,7 +4865,7 @@ async function renderInterlink(v, param) {
       (!fil.unit || r.unit === fil.unit)
     );
     const tb = $('#il-body', v);
-    tb.innerHTML = rows.length ? rows.map(r => `<tr>
+    tb.innerHTML = rows.length ? rows.map(r => `<tr data-code="${esc(r.sku_code)}">
       <td class="mono">${esc(r.sku_code)}</td><td>${esc(r.name)}</td><td class="muted">${esc(r.spec || '—')}</td>
       <td>${r.category_name ? `<span class="badge blue">${esc(r.category_name)}</span>` : '—'}</td>
       <td>${esc(r.unit || '—')}</td><td>${esc(r.location || '—')}</td>
@@ -4903,7 +4910,7 @@ async function renderInterlink(v, param) {
   v.innerHTML = `
   <div class="toolbar">
     <select class="input" id="il-sel" style="min-width:260px">${peers.map(p => `<option value="${p.id}" ${p.id === cur.id ? 'selected' : ''}>${esc(p.name)} · ${esc(p.host)}:${p.port}（${online(p.id) ? '在线' : '离线'}）</option>`).join('')}</select>
-    <input class="input" id="il-q" placeholder="搜索 物资编码 / 物资名称 / 物资型号" style="min-width:230px">
+    <input class="input" id="il-q" placeholder="搜索 物资编码 / 物资名称 / 物资型号" style="min-width:230px" value="${esc(fil.q)}">
     <div class="spacer"></div>
     <button class="btn" id="il-ref">↻ 刷新 / 重新探测</button>
     <button class="btn" id="il-snapbtn">📸 保存对端快照</button>
@@ -4969,7 +4976,7 @@ async function renderInstruments(v) {
   const paint = () => {
     const fq = fil.q.trim().toLowerCase();
     const list = rows.filter(r => (!fq || [r.name, r.serial_no, r.spec, r.location].some(x => String(x || '').toLowerCase().includes(fq))) && (!fil.status || r.status === fil.status));
-    $('#inst-body', v).innerHTML = list.length ? list.map(r => `<tr>
+    $('#inst-body', v).innerHTML = list.length ? list.map(r => `<tr data-id="${r.id}">
       <td><b>${esc(r.name)}</b></td><td class="mono">${esc(r.serial_no || '—')}</td>
       <td class="muted">${esc(r.spec || '—')}</td>
       <td>${esc(r.location || '—')}</td>
@@ -5046,9 +5053,9 @@ function renewModal(item, after) {
 }
 
 /* ---- 药品管理 ---- */
-async function renderMedicines(v) {
-  const rows = await api('/api/medicines').catch(() => []);
-  const fil = { q: '' };
+async function renderMedicines(v, param) {
+  const rows = await api('/api/medicines' + (param && param.all ? '?all=1' : '')).catch(() => []);
+  const fil = { q: param && param.q ? String(param.q) : '' };   // 搜索关键词可随重绘带回来（复制/编辑/停用后仍停在原搜索结果上）
   const DOC_CN = { in: '入库', out: '出库', count: '盘库' };
   // 条码单元格：点数字看一维码（商品条码 69 码 / 药品追溯码）
   const bcCell = (code, kind) => {
@@ -5071,38 +5078,57 @@ async function renderMedicines(v) {
   };
   const paint = () => {
     const fq = fil.q.trim().toLowerCase();
-    const list = rows.filter(r => !fq || [r.name, r.mcode, r.spec, r.batch, r.source, r.barcode, r.code].some(x => String(x || '').toLowerCase().includes(fq)));
-    $('#med-body', v).innerHTML = list.length ? list.map(r => `<tr>
-      <td class="mono">${esc(r.mcode || '—')}</td><td><b>${esc(r.name)}</b></td><td class="muted">${esc(r.spec || '—')}</td><td class="mono">${esc(r.batch || '—')}</td>
+    const list = rows.filter(r => !fq || [r.name, r.mcode, r.spec, r.unit, r.batch, r.source, r.barcode, r.code].some(x => String(x || '').toLowerCase().includes(fq)));
+    $('#med-body', v).innerHTML = list.length ? list.map(r => `<tr data-id="${r.id}">
+      <td class="mono">${esc(r.mcode || '—')}</td><td><b>${esc(r.name)}</b>${r.active ? '' : ' <span class="badge gray">已停用</span>'}</td><td class="muted">${esc(r.spec || '—')}</td><td class="mono">${esc(r.batch || '—')}</td>
       <td>${esc(r.prod_date || '—')}</td><td>${expCell(r.expire_date)}</td>
       <td>${esc(r.in_date || '—')}</td><td>${esc(r.source || '—')}</td>
       ${bcCell(r.barcode, '商品条码')}${bcCell(r.code, '药品追溯码')}
       <td class="num">${stockCell(r)}</td>
+      <td>${esc(r.unit || '—')}</td>
       <td class="muted">${esc(r.remark || '')}</td>
-      <td style="white-space:nowrap"><button class="btn sm" data-act="copy" data-id="${r.id}" title="以本行内容新建一条（改完保存为新行，原行不变）">复制</button><button class="btn sm" data-act="edit" data-id="${r.id}">编辑</button><button class="btn sm danger" data-act="del" data-id="${r.id}">删除</button></td></tr>`).join('')
-      : '<tr><td colspan="13"><div class="empty"><div class="big">💊</div>暂无药品，点击右上角「＋ 新增药品」登记。</div></td></tr>';
+      <td style="white-space:nowrap"><button class="btn sm" data-act="copy" data-id="${r.id}" title="以本行内容新建一条（改完保存为新行，原行不变）">复制</button><button class="btn sm" data-act="edit" data-id="${r.id}">编辑</button><button class="btn sm" data-act="toggle" data-id="${r.id}" title="${r.active ? '停用后默认不在本页显示、出入库单也选不到（可随时启用）' : '启用后可重新在出入库单里选用'}">${r.active ? '停用' : '启用'}</button><button class="btn sm danger" data-act="del" data-id="${r.id}">删除</button></td></tr>`).join('')
+      : '<tr><td colspan="14"><div class="empty"><div class="big">💊</div>暂无药品，点击右上角「＋ 新增药品」登记。</div></td></tr>';
   };
   v.innerHTML = `<div class="toolbar">
-    <input class="input" id="med-q" placeholder="搜索 药品名称 / 物资编码 / 规格型号 / 产品批号 / 来源 / 商品条码 / 追溯码" style="min-width:320px">
+    <input class="input" id="med-q" placeholder="搜索 药品名称 / 物资编码 / 规格型号 / 单位 / 产品批号 / 来源 / 商品条码 / 追溯码" style="min-width:320px" value="${esc(fil.q)}">
+    <label class="check"><input type="checkbox" id="med-all" ${param && param.all ? 'checked' : ''}> 显示已停用</label>
     <div class="spacer"></div>
+    <button class="btn" id="med-exp" title="按当前搜索关键词与「显示已停用」导出所见范围">⬇ 导出清单</button>
     <button class="btn" id="med-tpl">⬇ 导入模板</button>
     <button class="btn" id="med-imp">⬆ 按模板导入</button>
     <button class="btn primary" id="med-new">＋ 新增药品</button></div>
-    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>物资编码</th><th>药品名称</th><th>规格型号</th><th>产品批号</th><th>生产日期</th><th>有效期</th><th>入库日期</th><th>药品来源</th><th>商品条码</th><th>药品追溯码</th><th class="num">数量</th><th>备注</th><th style="width:200px">操作</th></tr></thead><tbody id="med-body"></tbody></table></div></div>
-    <div class="hint"><b>商品条码</b>（69 码）与<b>药品追溯码</b>（码上放心 20 位）都可以点数字看一维码，方便用扫码枪核对；一维码按 EAN-13 / CODE128 自动选择。到期前 90 天内首页会提示；支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记。<b>数量</b>以出入库单为准（做单会自动加减），需要修正时点「编辑」直接改数量即可（记下手动调整量，悬停可看明细）。同一药品<b>不同批次请分条录入</b>——批号即识别码，出入库单的候选条目会显示批号，各批次数量独立核算。药品<b>不进入「物资管理」「库存 & 清单」「盘库」</b>；出入库请到「出入库」页按物资编码 / 药品名称搜到它（候选中标着「药品」）。</div>`;
+    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>物资编码</th><th>药品名称</th><th>规格型号</th><th>产品批号</th><th>生产日期</th><th>有效期</th><th>入库日期</th><th>药品来源</th><th>商品条码</th><th>药品追溯码</th><th class="num">数量</th><th>单位</th><th>备注</th><th style="width:200px">操作</th></tr></thead><tbody id="med-body"></tbody></table></div></div>
+    <div class="hint"><b>商品条码</b>（69 码）与药品<b>追溯码</b>（使用支付宝扫描）都可以点数字看一维码，方便用扫码枪核对；一维码按 EAN-13 / CODE128 自动选择。新增时填了<b>追溯码</b>（一盒一码）数量默认 <b>1</b>，可手改。「<b>停用</b>」后的药品默认不在本页显示（勾上方「显示已停用」可看到并启用回来），出入库单里也选不到，但<b>历史单据与库存流水不受影响</b>。到期前 90 天内首页会提示；支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记。<b>数量</b>以出入库单为准（做单会自动加减），需要修正时点「编辑」直接改数量即可（记下手动调整量，悬停可看明细）。同一药品<b>不同批次请分条录入</b>——批号即识别码，出入库单的候选条目会显示批号，各批次数量独立核算。药品<b>不进入「物资管理」「库存 & 清单」「盘库」</b>；出入库请到「出入库」页按物资编码 / 药品名称搜到它（候选中标着「药品」）。</div>`;
   paint();
   $('#med-q', v).oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#med-q', v).value; paint(); }, 200); }; })();
-  $('#med-new', v).onclick = () => medicineModal(null, () => renderMedicines(v));
+  const medAll = () => ($('#med-all', v) && $('#med-all', v).checked ? true : undefined);
+  const medQ = () => { const el = $('#med-q', v); return el && el.value.trim() ? el.value.trim() : undefined; };
+  // 数据变动后重绘：清掉「默认 / 显示已停用」两种页面暂存，并保留当前搜索关键词与「显示已停用」勾选
+  const repaint = () => {
+    VIEW_CACHE.delete(viewCacheKey('medicines', undefined));
+    VIEW_CACHE.delete(viewCacheKey('medicines', { all: true }));
+    renderMedicines(v, { all: medAll(), q: medQ() });
+  };
+  $('#med-all', v).onchange = () => show('medicines', { all: medAll() ? true : undefined, q: medQ() }, { force: true });
+  $('#med-new', v).onclick = () => medicineModal(null, repaint);
+  $('#med-exp', v).onclick = () => {
+    const qs = new URLSearchParams();
+    if (medAll()) qs.set('all', '1');
+    if (medQ()) qs.set('q', medQ());
+    safeRun(() => download('/api/export/medicines' + (qs.toString() ? '?' + qs.toString() : ''), `药品清单_${today()}.xlsx`));
+  };
   $('#med-tpl', v).onclick = () => impDownloadTemplate('medicines');
-  $('#med-imp', v).onclick = () => impFlow('medicines', () => renderMedicines(v));
+  $('#med-imp', v).onclick = () => impFlow('medicines', repaint);
   $('#med-body', v).addEventListener('click', e => {
     const bc = e.target.closest('[data-bc]');
     if (bc) return barcodeModal(bc.dataset.bc, bc.dataset.bcKind);
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const id = Number(b.dataset.id); const act = b.dataset.act; const r = rows.find(x => x.id === id);
-    if (act === 'edit') medicineModal(r, () => renderMedicines(v));
-    else if (act === 'copy') medicineModal(r, () => renderMedicines(v), { copy: true });
-    else if (act === 'del') (async () => { if (await confirmBox(`删除药品「${r.name}」？不可恢复。`, { danger: true, okText: '删除' })) { try { await safeRun(() => api(`/api/medicines/${id}`, { method: 'DELETE' })); toast('已删除'); renderMedicines(v); } catch {} } })();
+    if (act === 'edit') medicineModal(r, repaint);
+    else if (act === 'copy') medicineModal(r, repaint, { copy: true });
+    else if (act === 'toggle') (async () => { try { await safeRun(() => api(`/api/medicines/${id}/toggle`, { method: 'POST', body: '{}' })); toast(r.active ? '已停用（默认不再显示）' : '已启用'); repaint(); } catch {} })();
+    else if (act === 'del') (async () => { if (await confirmBox(`删除药品「${r.name}」？不可恢复。`, { danger: true, okText: '删除' })) { try { await safeRun(() => api(`/api/medicines/${id}`, { method: 'DELETE' })); toast('已删除'); repaint(); } catch {} } })();
   });
 }
 /* 一维码弹窗：把条码数字渲染成一维码（EAN-13 商品 69 码 / CODE128 追溯码，见 static/vendor/barcode.js） */
@@ -5135,21 +5161,22 @@ function medicineModal(item, after, opts) {
   const isNew = !item || copy;
   const { el, close } = modal({ title: copy ? '复制新增药品' : (item ? '编辑药品' : '新增药品'), small: true,
     body: `<label class="field"><span class="lab">药品名称 *</span><input class="input" id="md-name" value="${esc(item ? item.name : '')}"></label>
-      <label class="field"><span class="lab">规格型号</span><input class="input" id="md-spec" value="${esc(item ? item.spec : '')}" placeholder="如 0.25g×24粒/盒"></label>
+      <div class="split"><label class="field"><span class="lab">规格型号</span><input class="input" id="md-spec" value="${esc(item ? item.spec : '')}" placeholder="如 0.25g×24粒/盒"></label>
+      <label class="field"><span class="lab">单位</span><input class="input" id="md-unit" list="unit-list" value="${esc(item ? item.unit : '')}" placeholder="如 盒 / 瓶 / 支"></label></div>
       <div class="split"><label class="field"><span class="lab">物资编码</span><input class="input mono" id="md-mcode" value="${esc(item ? item.mcode : '')}" placeholder="药品自己的物资编码（不进物资管理）"></label>
       <label class="field"><span class="lab">产品批号</span><input class="input mono" id="md-batch" value="${esc(item ? item.batch : '')}" placeholder="如 240315A"></label></div>
       <div class="split"><label class="field"><span class="lab">数量（可手改）</span><input class="input num" type="number" min="0" id="md-qty" value="${item ? Number(item.stock_qty || 0) : 0}"></label>
       <label class="field"><span class="lab">商品条码（69 码）</span><span style="display:flex;gap:6px"><input class="input mono" id="md-bar" value="${esc(item ? item.barcode : '')}" placeholder="如 6901234567892"><button class="btn sm" type="button" id="md-bar-view" title="预览一维码">▥</button></span></label></div>
-      <div class="split"><label class="field"><span class="lab">药品追溯码</span><span style="display:flex;gap:6px"><input class="input mono" id="md-code" value="${esc(item ? item.code : '')}" placeholder="码上放心 20 位追溯码"><button class="btn sm" type="button" id="md-code-view" title="预览一维码">▥</button></span></label>
+      <div class="split"><label class="field"><span class="lab">药品追溯码</span><span style="display:flex;gap:6px"><input class="input mono" id="md-code" value="${esc(item ? item.code : '')}" placeholder="使用支付宝扫描"><button class="btn sm" type="button" id="md-code-view" title="预览一维码">▥</button></span></label>
       <label class="field"><span class="lab">备注</span><input class="input" id="md-rmk" value="${esc(item ? item.remark : '')}"></label></div>
       <div id="md-bc" style="margin:-4px 0 10px"></div>
       <div class="split"><label class="field"><span class="lab">生产日期</span><input class="input" type="date" id="md-prod" value="${esc(item ? item.prod_date : '')}"></label>
       <label class="field"><span class="lab">有效期 *</span><input class="input" type="date" id="md-exp" value="${esc(item ? item.expire_date : '')}"></label></div>
       <div class="split"><label class="field"><span class="lab">入库日期</span><input class="input" type="date" id="md-in" value="${esc(item ? item.in_date : TODAY())}"></label>
       <label class="field"><span class="lab">药品来源</span><input class="input" id="md-src" value="${esc(item ? item.source : '')}" placeholder="如 药房/供应商"></label></div>
-      ${copy ? `<div class="hint">已带入原条目内容，<b>保存后会新增一条</b>（原条目不变）。请把<b>产品批号 / 商品条码 / 追溯码 / 数量</b>改成这一批的实际情况；数量填的是新条目的当前数量。</div>`
+      ${copy ? `<div class="hint">已带入原条目内容，<b>保存后会新增一条</b>（原条目不变）。请把<b>产品批号 / 商品条码 / 追溯码 / 数量</b>改成这一批的实际情况；<b>追溯码唯一</b>，填重复会提示是哪条占用了它；数量填的是新条目的当前数量。</div>`
         : item ? `<div class="hint">当前数量 ${Number(item.stock_qty || 0)} = 出入库合计 ${Number(item.flow_qty || 0) > 0 ? '+' : ''}${Number(item.flow_qty || 0)}${Number(item.init_qty || 0) ? ` ± 手工调整 ${Number(item.init_qty || 0) > 0 ? '+' : ''}${Number(item.init_qty || 0)}` : ''}。直接改上面的数量即以该值为准（出入库会继续在上面加减）。</div>`
-        : '<div class="hint">同一药品不同批次请分条录入（批号即识别码）。初始数量可先填，也可只走出入库单。</div>'}`,
+        : '<div class="hint">同一药品不同批次请分条录入（批号即识别码）。填了「药品追溯码」（一盒一码）时数量默认 <b>1</b>，可手改；初始数量也可先不填，只走出入库单。</div>'}`,
     foot: `<button class="btn" data-c>取消</button><button class="btn primary" id="md-save">保存</button>` });
   $$('[data-c]', el).forEach(x => x.onclick = close);
   // 一维码即时预览（在弹窗内就地显示，不再叠一层弹窗）
@@ -5162,8 +5189,18 @@ function medicineModal(item, after, opts) {
   };
   $('#md-bar-view', el).onclick = () => showBc('#md-bar', '商品条码');
   $('#md-code-view', el).onclick = () => showBc('#md-code', '药品追溯码');
+  // 追溯码 = 一盒一码：新增时填了追溯码就把数量默认成 1（用户手动改过数量后不再干预；编辑旧记录也不动数量）
+  const qtyEl = $('#md-qty', el), codeEl = $('#md-code', el);
+  let qtyTouched = !isNew;
+  qtyEl.addEventListener('input', () => { qtyTouched = true; });
+  codeEl.addEventListener('input', () => {
+    const v = String(codeEl.value || '').trim();
+    if (qtyTouched) return;
+    if (v && !(Number(qtyEl.value) > 0)) qtyEl.value = '1';
+    else if (!v && qtyEl.value === '1') qtyEl.value = '0';
+  });
   $('#md-save', el).onclick = async () => {
-    const body = { name: $('#md-name', el).value.trim(), mcode: $('#md-mcode', el).value.trim(), spec: $('#md-spec', el).value.trim(), batch: $('#md-batch', el).value.trim(), qty: $('#md-qty', el).value === '' ? undefined : Number($('#md-qty', el).value), prod_date: $('#md-prod', el).value, expire_date: $('#md-exp', el).value, in_date: $('#md-in', el).value, source: $('#md-src', el).value.trim(), barcode: $('#md-bar', el).value.trim(), code: $('#md-code', el).value.trim(), remark: $('#md-rmk', el).value.trim() };
+    const body = { name: $('#md-name', el).value.trim(), mcode: $('#md-mcode', el).value.trim(), spec: $('#md-spec', el).value.trim(), unit: $('#md-unit', el).value.trim(), batch: $('#md-batch', el).value.trim(), qty: $('#md-qty', el).value === '' ? undefined : Number($('#md-qty', el).value), prod_date: $('#md-prod', el).value, expire_date: $('#md-exp', el).value, in_date: $('#md-in', el).value, source: $('#md-src', el).value.trim(), barcode: $('#md-bar', el).value.trim(), code: $('#md-code', el).value.trim(), remark: $('#md-rmk', el).value.trim() };
     if (!body.name) return toast('药品名称必填', 'err');
     try { await safeRun(() => api(isNew ? '/api/medicines' : `/api/medicines/${item.id}`, { method: isNew ? 'POST' : 'PUT', body: JSON.stringify(body) })); toast(copy ? '已新增一条' : '已保存'); close(); after && after(); } catch {}
   };
@@ -5185,7 +5222,7 @@ async function renderDamages(v) {
     const list = rows.filter(r => (!fq || [r.sku_code, r.name, r.spec, r.location, r.sn, r.reason].some(x => String(x || '').toLowerCase().includes(fq)))
       && (!fil.status || r.status === fil.status));
     $('#dmg-fcnt', v).textContent = `共 ${list.length} / ${rows.length} 条`;
-    $('#dmg-body', v).innerHTML = list.length ? list.map(r => `<tr>
+    $('#dmg-body', v).innerHTML = list.length ? list.map(r => `<tr data-id="${r.id}">
       <td class="mono">${esc(r.sku_code || '—')}</td><td><b>${esc(r.name)}</b></td>
       <td class="muted">${esc(r.spec || '—')}</td>
       <td>${esc(r.location || '—')}</td>
@@ -5293,7 +5330,7 @@ async function renderOffice(v, param) {
     const fq = fil.q.trim().toLowerCase();
     const list = rows.filter(r => (!fq || [r.code, r.name, r.spec].some(x => String(x || '').toLowerCase().includes(fq))) && (!fil.cat || r.category_name === fil.cat));
     $('#off-fcnt', v).textContent = `共 ${list.length} / ${rows.length} 条`;
-    $('#off-body', v).innerHTML = list.length ? list.map(r => `<tr>
+    $('#off-body', v).innerHTML = list.length ? list.map(r => `<tr data-id="${r.id}">
       <td class="mono">${esc(r.code || '—')}</td><td><b>${esc(r.name)}</b></td><td class="muted">${esc(r.spec || '—')}</td>
       <td>${r.category_name ? `<span class="badge blue">${esc(r.category_name)}</span>` : '—'}</td>
       <td>${esc(r.unit || '—')}</td><td class="num">${r.qty}</td><td>${esc(r.location || '—')}</td>
@@ -5367,7 +5404,7 @@ async function renderLoans(v) {
       const isBorrow = r.kind === 'borrow';
       const issue = isBorrow ? { lab: '借入·入库单', no: r.in_doc_no, id: r.doc_in_id } : { lab: '借出·出库单', no: r.out_doc_no, id: r.doc_out_id };
       const closeD = isBorrow ? { lab: '归还·出库单', no: r.out_doc_no, id: r.doc_out_id } : { lab: '还入·入库单', no: r.in_doc_no, id: r.doc_in_id };
-      return `<tr class="${r.status === 'out' ? (r.alarm === 'over' ? 'al-over' : r.alarm === 'soon3' ? 'al-soon3' : r.alarm === 'soon7' ? 'al-soon7' : '') : ''}">
+      return `<tr data-id="${r.id}" class="${r.status === 'out' ? (r.alarm === 'over' ? 'al-over' : r.alarm === 'soon3' ? 'al-soon3' : r.alarm === 'soon7' ? 'al-soon7' : '') : ''}">
       <td>${loanKindBadge(r.kind)}</td>
       <td>${esc(r.borrower || '—')}${r.contact ? `<div class="muted" style="font-size:12px">${esc(r.contact)}</div>` : ''}</td>
       <td>${r.sku_code ? `<span class="mono">${esc(r.sku_code)}</span>|` : ''}<b>${esc(r.name)}</b>${r.spec ? `<div class="muted" style="font-size:12px">${esc(r.spec)}</div>` : ''}</td>
@@ -5624,18 +5661,37 @@ document.addEventListener('click', e => {
 /* ============================================================
  * 全局搜索（本机各模块 + 互联仓库）
  * ============================================================ */
+/* 全局搜索跳转后的定位高亮：目标条目高亮闪烁 3 秒（6 次 × 0.5s，见 app.css 的 .hit-flash）
+ * 列表是异步渲染的，所以这里带重试（最多 ~1.8s），拿到元素后再滚动到视线中间 */
+async function flashHit(sel, tries = 12) {
+  for (let i = 0; i < tries; i++) {
+    const el = document.querySelector(sel);
+    if (el) {
+      try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { try { el.scrollIntoView(); } catch {} }
+      el.classList.remove('hit-flash');
+      void el.offsetWidth;                 // 重排一下，保证连续两次点击都能重放动画
+      el.classList.add('hit-flash');
+      setTimeout(() => el.classList.remove('hit-flash'), 3600);
+      return true;
+    }
+    await new Promise(r => setTimeout(r, 150));
+  }
+  return false;
+}
 function runGlobalSearch() {
   const inp = $('#global-q'); if (!inp) return;
   const q = inp.value.trim(); if (!q) return;
+  // 点击结果：跳到对应页面 + 把那一条高亮闪烁 3 秒
+  // locate：先按该关键字筛出目标（单据流水是分页的、SN 列表可能很长），保证目标行一定在列表里
   const GROUPS = {
-    skus: { go: r => skuDetailModal(Number(r.id)) },
-    sn: { go: () => show('sn') },
-    docs: { go: r => viewDoc(Number(r.id)) },
-    instruments: { go: () => show('instruments') },
-    medicines: { go: () => show('medicines') },
-    damages: { go: () => show('damages') },
-    office: { go: () => show('office') },
-    loans: { go: () => show('loans') },
+    skus: { view: 'skus', all: true, sel: id => `#sku-tbody tr[data-id="${id}"]` },
+    sn: { view: 'sn', locate: r => r.code, sel: id => `#sn-body tr[data-id="${id}"]` },
+    docs: { view: 'docs', locate: r => r.code, sel: id => `#view tbody tr[data-id="${id}"]` },
+    instruments: { view: 'instruments', sel: id => `#inst-body tr[data-id="${id}"]` },
+    medicines: { view: 'medicines', all: true, sel: id => `#med-body tr[data-id="${id}"]` },
+    damages: { view: 'damages', sel: id => `#dmg-body tr[data-id="${id}"]` },
+    office: { view: 'office', all: true, sel: id => `#off-body tr[data-id="${id}"]` },
+    loans: { view: 'loans', sel: id => `#loan-body tr[data-id="${id}"]` },
   };
   const LABEL = { skus: '📦 物资', sn: '🔢 SN 序列号', docs: '🧾 单据', instruments: '📏 计量器具', medicines: '💊 药品', damages: '🔧 坏件', office: '🖨️ 办公物资', loans: '🔖 物资借用' };
   const { el, close } = modal({ title: '全局搜索', wide: true,
@@ -5655,15 +5711,27 @@ function runGlobalSearch() {
         const idAttr = row.id != null && !row.peer_id ? ` data-id="${row.id}"` : '';
         const subFull = String(row.sub || '');
         const subShow = subFull.length > 20 ? subFull.slice(0, 20) + '…' : subFull;
-        return `<div class="gs-item" data-key="${grp.key}"${idAttr}${peerAttr}><div class="gs-main"><b>${esc(row.code || '')}</b> <span>${esc(row.title || '')}</span><div class="muted" style="font-size:12px" title="${esc(subFull)}">${esc(subShow)}</div></div><span class="gs-arrow">›</span></div>`;
+        return `<div class="gs-item" data-key="${grp.key}"${idAttr}${peerAttr} data-code="${esc(row.code || '')}"><div class="gs-main"><b>${esc(row.code || '')}</b> <span>${esc(row.title || '')}</span><div class="muted" style="font-size:12px" title="${esc(subFull)}">${esc(subShow)}</div></div><span class="gs-arrow">›</span></div>`;
       }).join('');
       return `<div class="gs-group"><div class="gs-head">${head}<span class="muted">${grp.rows.length}</span></div>${items}</div>`;
     }).join('');
     b.querySelectorAll('.gs-item').forEach(it => {
-      it.onclick = () => {
+      it.onclick = async () => {
         const key = it.dataset.key;
-        if (key === '__peer') { close(); show('interlink', { peer: Number(it.dataset.peer) }); return; }
-        const meta = GROUPS[key]; if (meta) { close(); meta.go({ id: it.dataset.id }); }
+        if (key === '__peer') {              // 互联仓库：切到该对端并定位到那一条物资
+          const code = String(it.dataset.code || '');
+          close();
+          await show('interlink', { peer: Number(it.dataset.peer), locate: code }, { force: true });
+          await flashHit(`#il-body tr[data-code="${code}"]`);
+          return;
+        }
+        const meta = GROUPS[key]; if (!meta) return;
+        const id = Number(it.dataset.id);
+        const param = meta.locate ? { locate: String(meta.locate({ code: it.dataset.code, id: it.dataset.id }) || '') } : {};
+        close();
+        await show(meta.view, Object.keys(param).length ? param : undefined, { force: true });
+        if (await flashHit(meta.sel(id))) return;
+        if (meta.all) { await show(meta.view, { all: true }, { force: true }); await flashHit(meta.sel(id)); }  // 停用条目默认不显示：放宽一次
       };
     });
   }).catch(e => { const b = $('#gs-body', el); if (b) b.innerHTML = `<div class="empty"><div class="big">⚠️</div>${esc(e.message)}</div>`; });
@@ -5682,6 +5750,18 @@ function globalSearchInit() {
  * 更新日志（点击底部版本号弹出，不需单独页面）
  * ============================================================ */
 const CHANGELOG = [
+  {
+    ver: '0.10.16', title: '药品新增「单位」列，填了追溯码数量默认 1', date: '2026-09',
+    items: [
+      '「药品管理」新增<b>单位</b>列（盒 / 瓶 / 支 …）：新增 / 编辑、搜索、按模板导入都支持；单位会一并带给出入库单里的药品（候选条目与单据行都能看到）',
+      '新增药品时填了<b>药品追溯码</b>（使用支付宝扫描获取）→ 数量自动默认成 <b>1</b>，仍可手改；手动改过数量后不会再被覆盖，编辑已有记录时也不会动数量',
+      '<b>全局搜索（Ctrl+K）点结果会跳到对应页面，并把那一条高亮闪烁 3 秒</b>：物资 / SN / 单据 / 器具 / 药品 / 坏件 / 办公物资 / 借用 / 互联仓库都支持，一眼就知道是哪儿条（物资、单据结果也从“弹详情”改成跳列表页 + 闪烁那一条）；单据按单号、SN 按序列号先筛出目标，保证目标一定在列表里',
+      '<b>药品可停用</b>：操作列新增「停用 / 启用」（也可在页面勾「显示已停用」查看与恢复）——停用的药品默认不在药品管理页显示、出入库单里也选不到，历史单据与库存流水不受影响；首页临期 / 过期提醒与到期邮件提醒都会自动略过已停用药品',
+      '<b>药品追溯码唯一校验</b>：一盒一码，新增 / 编辑时填了别的药品已用的追溯码会被拦下并告知是哪一条在占用（按模板导入时重复行自动跳过，不会整单失败）',
+      '药品管理页<b>搜索后复制 / 编辑 / 停用药品不再跳回全部列表</b>：重绘时会带回当前搜索关键词与「显示已停用」勾选，停在原来的搜索结果上',
+      '药品管理新增<b>「⬇ 导出清单」</b>：一键导出 xlsx（物资编码 / 名称 / 规格型号 / 单位 / 批号 / 生产日期 / 有效期至 / 入库日期 / 来源 / 商品条码 / 药品追溯码 / 数量 / 状态 / 备注），<b>导出的就是页面当前所见范围</b>——搜索了关键词、勾了「显示已停用」都跟着走；表尾附导出时间与条数，首行冻结',
+    ],
+  },
   {
     ver: '0.10.15', title: '药品支持数量管理（出入库自动加减，也可手改）', date: '2026-09',
     items: [

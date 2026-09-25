@@ -21,7 +21,7 @@ const { spawnSync, spawn } = require('child_process');
 // 版本号（同步落点：package.json / package-lock.json(两处) / dist/windows/build/ThingsManager.iss(MyAppVer+VersionInfoVersion) /
 //  static/index.html(#ver-chip 与 ?v=) / static/app.js(CHANGELOG 首条 + milestone) / docs 两份）；
 // 规则：修订号 +0.0.1 = 修复与小改动；次版本号 +0.1.0 = 一批新功能 / 准备发版；未发版前的后续改动并入同一版本号不重复升位
-const APP_VERSION = '0.10.15';
+const APP_VERSION = '0.10.16';
 
 const ROOT = __dirname;
 // 运行配置（桌面/安装版使用）：存于安装目录 runtime.config.json —— dataDir 等。
@@ -521,6 +521,11 @@ ensureColumn('loans', 'kind', "TEXT NOT NULL DEFAULT 'lend'"); // lend=借出(�
 ensureColumn('loans', 'remind_days', 'INTEGER'); // 每笔借用独立的“借期提醒天数”（用于超期/临期预警）
 ensureColumn('instruments', 'spec', "TEXT NOT NULL DEFAULT ''"); // 计量器具 型号/规格
 ensureColumn('medicines', 'spec', "TEXT NOT NULL DEFAULT ''"); // 药品 规格/包装规格
+ensureColumn('medicines', 'unit', "TEXT NOT NULL DEFAULT ''"); // 单位（盒 / 瓶 / 支 …）
+ensureColumn('medicines', 'active', 'INTEGER NOT NULL DEFAULT 1'); // 是否启用：1 启用 / 0 停用（停用的默认隐藏、出入库也选不到）
+// 药品追溯码唯一（部分唯一索引：只约束非空的 code）；历史数据里若已有重复则跳过建索引，仅靠接口层校验
+try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_med_code_uniq ON medicines(code) WHERE code <> ''"); }
+catch (e) { console.log('提示：药品追溯码唯一索引未建立（库中可能已有重复追溯码，仍会在新增 / 编辑时校验）：' + e.message); }
 ensureColumn('medicines', 'mcode', "TEXT NOT NULL DEFAULT ''"); // 物资编码（药品自己的编码，不进物资管理）
 ensureColumn('medicines', 'batch', "TEXT NOT NULL DEFAULT ''"); // 产品批号
 ensureColumn('medicines', 'barcode', "TEXT NOT NULL DEFAULT ''"); // 商品条码（69 码 / EAN-13，可点开看一维码）
@@ -552,7 +557,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS app_logs(
 );`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_app_logs_ts ON app_logs(ts);');
 const iInst = db.prepare('INSERT INTO instruments(name,serial_no,spec,location,status,last_date,expire_date,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
-const iMed = db.prepare('INSERT INTO medicines(name,mcode,spec,batch,prod_date,expire_date,in_date,source,barcode,code,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
+const iMed = db.prepare('INSERT INTO medicines(name,mcode,spec,unit,batch,prod_date,expire_date,in_date,source,barcode,code,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)');
 const iDmg = db.prepare('INSERT INTO damaged_items(sku_id,sku_code,name,spec,unit,location,qty,sn,reason,status,operator,date,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
 const iOff = db.prepare('INSERT INTO office_items(code,name,spec,unit,qty,category_id,location,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
 const iLoan = db.prepare('INSERT INTO loans(kind,doc_out_id,doc_in_id,borrower,contact,sku_id,sku_code,name,spec,unit,sn_managed,qty,sn,loan_date,due_date,remind_days,status,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
@@ -1911,9 +1916,11 @@ const API_DOC_GROUPS = [
     ['POST', '/api/instruments/:id/renew', '续期：更新最近检定 / 到期日并解封'],
     ['POST', '/api/instruments/:id/seal', '封存 / 解封'],
     ['DELETE', '/api/instruments/:id', '删除计量器具'],
-    ['GET', '/api/medicines', '药品列表（含效期）'],
+    ['GET', '/api/medicines', '药品列表（含效期；默认只返回启用中的，all=1 含已停用）'],
     ['POST', '/api/medicines', '新增药品'],
     ['PUT', '/api/medicines/:id', '修改药品'],
+    ['POST', '/api/medicines/:id/toggle', '停用 / 启用药品（停用后默认隐藏、出入库单选不到）'],
+    ['GET', '/api/export/medicines', '导出药品清单 xlsx（可带 q 关键词与 all=1 含已停用，导出页面所见范围）'],
     ['DELETE', '/api/medicines/:id', '删除药品'],
     ['GET', '/api/damages', '坏件台账列表（可按状态 / 关键词筛选）'],
     ['POST', '/api/damages', '登记坏件（条目取物资管理档案，不影响库存）'],
@@ -2884,6 +2891,46 @@ app.get('/api/export/inventory', asy(async (req, res) => {
   const buf = await exportInventory({ include_sn: req.query.include_sn === '1', include_zero: req.query.include_zero === '1', operator: req.query.operator, location: req.query.location, date: req.query.date, company: req.query.company });
   sendXlsx(res, buf, `库存清单表_${dateOf(req.query.date) || today()}.xlsx`);
 }));
+/* 药品清单导出（xlsx）：与药品管理页口径一致——按当前搜索关键词 + 是否含已停用导出；
+ * 药品字段（批号 / 追溯码 / 商品条码 / 效期）与物资清单模板差异较大，所以自带表头，不走物资清单模板 */
+app.get('/api/export/medicines', asy(async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const cond = []; const args = [];
+  if (req.query.all !== '1') cond.push('active=1');
+  if (q) { cond.push('(name LIKE ? OR mcode LIKE ? OR spec LIKE ? OR unit LIKE ? OR batch LIKE ? OR source LIKE ? OR barcode LIKE ? OR code LIKE ?)'); const l = `%${q}%`; args.push(l, l, l, l, l, l, l, l); }
+  const rows = sall(`SELECT * FROM medicines ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''} ORDER BY expire_date, id DESC`, ...args);
+  const stock = stockMap();
+  const ExcelJSX = require('exceljs');
+  const wb = new ExcelJSX.Workbook();
+  wb.creator = 'ThingsManager';
+  const ws = wb.addWorksheet('药品清单');
+  ws.addRow(['物资编码', '药品名称', '规格型号', '单位', '产品批号', '生产日期', '有效期至', '入库日期', '药品来源', '商品条码', '药品追溯码', '数量', '状态', '备注']);
+  const head = ws.getRow(1);
+  head.font = { bold: true };
+  head.alignment = { vertical: 'middle', horizontal: 'center' };
+  head.height = 20;
+  head.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F4F8' } }; c.border = { bottom: { style: 'thin', color: { argb: 'FFE5E8EF' } } }; });
+  for (const r of rows) {
+    ws.addRow([
+      r.mcode || '', r.name || '', r.spec || '', r.unit || '', r.batch || '',
+      r.prod_date || '', r.expire_date || '', r.in_date || '', r.source || '',
+      r.barcode || '', r.code || '',
+      r.sku_id ? (stock.get(r.sku_id) || 0) : 0,
+      r.active ? '启用' : '已停用',
+      r.remark || '',
+    ]);
+  }
+  ws.getColumn(1).width = 14; ws.getColumn(2).width = 22; ws.getColumn(3).width = 20;
+  ws.getColumn(4).width = 8; ws.getColumn(5).width = 14; ws.getColumn(6).width = 12;
+  ws.getColumn(7).width = 12; ws.getColumn(8).width = 12; ws.getColumn(9).width = 14;
+  ws.getColumn(10).width = 16; ws.getColumn(11).width = 22; ws.getColumn(12).width = 8;
+  ws.getColumn(13).width = 8; ws.getColumn(14).width = 18;
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  const note = ws.addRow([]);
+  ws.addRow([`导出时间 ${now()}　共 ${rows.length} 条` + (q ? `　关键词「${q}」` : '') + (req.query.all === '1' ? '　含已停用' : '　仅启用中的药品')]);
+  note.height = 6;
+  sendXlsx(res, Buffer.from(await wb.xlsx.writeBuffer()), `药品清单_${today()}.xlsx`);
+}));
 app.post('/api/export/preview', asy(async (req, res) => {
   const body = req.body || {};
   const type = body.type;
@@ -3059,8 +3106,8 @@ app.get('/api/dashboard', wrap((req, res) => {
   // 专项提醒：计量器具/药品 三个月内临期 + 过期；在借物资
   const instExp = expiringSoon(sall("SELECT * FROM instruments WHERE status='active' ORDER BY expire_date"), r => r.expire_date, 90);
   const instOver = alreadyExpired(sall("SELECT * FROM instruments WHERE status='active'"), r => r.expire_date);
-  const medExp = expiringSoon(sall('SELECT * FROM medicines ORDER BY expire_date'), r => r.expire_date, 90);
-  const medOver = alreadyExpired(sall('SELECT * FROM medicines'), r => r.expire_date);
+  const medExp = expiringSoon(sall('SELECT * FROM medicines WHERE active=1 ORDER BY expire_date'), r => r.expire_date, 90);
+  const medOver = alreadyExpired(sall('SELECT * FROM medicines WHERE active=1'), r => r.expire_date);
   const loansActive = sall("SELECT * FROM loans WHERE status='out' ORDER BY loan_date, id").map(l => ({ ...l, days: daysBetween(l.loan_date, today()), ...loanAlarmFields(l) }));
   // 待我处理汇总（独立 box，始终返回；各子组内容按实际情况出现）：
   //   借用到期/超期预警（开关 loan_remind 控制）· 暂存单据 · 跨库流转待确认
@@ -4791,6 +4838,7 @@ const IMP_SPECS = {
       { key: 'name', label: '药品名称', required: true, aliases: ['药品名称', '名称'] },
       { key: 'mcode', label: '物资编码', aliases: ['物资编码', '物资编号'] },
       { key: 'spec', label: '规格', aliases: ['规格', '规格型号', '型号', '包装规格'] },
+      { key: 'unit', label: '单位', aliases: ['单位', '计量单位'] },
       { key: 'batch', label: '产品批号', aliases: ['产品批号', '批号', '生产批号'] },
       { key: 'barcode', label: '商品条码', aliases: ['商品条码', '条形码', '商品条形码', '69码', '69', 'ean13', 'ean-13', 'upc', '条码', '商品编码'] },
       { key: 'code', label: '追溯码/编码', aliases: ['追溯码/编码', '追溯码', '药品追溯码', '药品编码', '编码', '条码'] },
@@ -4974,7 +5022,10 @@ app.post('/api/import/:kind/xlsx/confirm', wrap((req, res) => {
       if (kind === 'instruments') {
         iInst.run(name, S('serial_no'), S('spec'), S('location'), (r0.status === 'sealed' ? 'sealed' : 'active'), D('last_date'), D('expire_date'), S('remark'), now());
       } else if (kind === 'medicines') {
-        const ri = iMed.run(name, S('mcode'), S('spec'), S('batch'), D('prod_date'), D('expire_date'), D('in_date'), S('source'), S('barcode'), S('code'), S('remark'), now());
+        const code = S('code');
+        // 追溯码唯一：与库里已有（含本次导入前面的行）重复时跳过该行，不整单失败
+        if (code && sget('SELECT id FROM medicines WHERE code=? LIMIT 1', code)) { skipped++; continue; }
+        const ri = iMed.run(name, S('mcode'), S('spec'), S('unit'), S('batch'), D('prod_date'), D('expire_date'), D('in_date'), S('source'), S('barcode'), code, S('remark'), now());
         medSkuSync(sget('SELECT * FROM medicines WHERE id=?', Number(ri.lastInsertRowid)));
       } else if (kind === 'office') {
         const ri = iOff.run(S('code'), name, S('spec'), S('unit'), parseInt(r0.qty, 10) || 0, catIdOf(r0.category), S('location'), S('remark'), now());
@@ -5042,16 +5093,18 @@ function medSkuSync(m) {
   const code = String(m.mcode || '').trim();
   const name = String(m.name || '').trim();
   const spec = String(m.spec || '').trim();
+  const unit = String(m.unit || '').trim();
+  const active = (m.active === 0 || m.active === '0') ? 0 : 1;   // 停用的药品，隐藏档案也停用 → 出入库单选不到
   let sku = m.sku_id ? skuById(m.sku_id) : null;
   if (!sku) {
     // 没填物资编码时不留占位编码（显示名 / 搜索按药品名称走）
-    const r = iSku.run(code, name, spec, '', 0, '', null, '', now());
+    const r = iSku.run(code, name, spec, unit, 0, '', null, '', now());
     const id = Number(r.lastInsertRowid);
-    db.prepare("UPDATE skus SET kind='med' WHERE id=?").run(id);
+    db.prepare("UPDATE skus SET kind='med', active=? WHERE id=?").run(active, id);
     db.prepare('UPDATE medicines SET sku_id=? WHERE id=?').run(id, m.id);
     return id;
   }
-  db.prepare("UPDATE skus SET sku_code=?, name=?, spec=?, kind='med', active=1 WHERE id=?").run(code, name, spec, sku.id);
+  db.prepare("UPDATE skus SET sku_code=?, name=?, spec=?, unit=?, kind='med', active=? WHERE id=?").run(code, name, spec, unit, active, sku.id);
   return sku.id;
 }
 // 药品的出入库小结：结存（手工调整 + 出入库）+ 单据数 + 最近一次流水
@@ -5073,9 +5126,19 @@ function medSetQty(skuId, qty) {
   const flow = sget('SELECT COALESCE(SUM(qty),0) AS q FROM document_lines WHERE sku_id=?', skuId).q || 0;
   db.prepare('UPDATE skus SET init_qty=? WHERE id=?').run(t - flow, skuId);
 }
+// 追溯码唯一：一盒一码，不可重复（已停用药品也占着它的码）。返回冲突的药品用于提示；不合法则抛错
+function medAssertCodeUnique(code, exceptId) {
+  const t = String(code || '').trim();
+  if (!t) return;   // 未填追溯码：允许（多条都为空也合法）
+  const ex = exceptId
+    ? sget('SELECT id,name,batch FROM medicines WHERE code=? AND id<>? LIMIT 1', t, exceptId)
+    : sget('SELECT id,name,batch FROM medicines WHERE code=? LIMIT 1', t);
+  if (ex) throw new Error(`追溯码 ${t} 已被「${ex.name}${ex.batch ? '（批号 ' + ex.batch + '）' : ''}」使用——追溯码唯一，不能重复（如为不同批次 / 不同盒，请填各自盒子上的追溯码）`);
+}
 app.get('/api/medicines', wrap((req, res) => {
   const q = (req.query.q || '').trim(); const cond = []; const args = [];
-  if (q) { cond.push('(name LIKE ? OR mcode LIKE ? OR spec LIKE ? OR batch LIKE ? OR source LIKE ? OR barcode LIKE ? OR code LIKE ?)'); const l = `%${q}%`; args.push(l, l, l, l, l, l, l); }
+  if (req.query.all !== '1') cond.push('active=1');   // 默认只看启用中的；页面勾「显示已停用」时才带 all=1
+  if (q) { cond.push('(name LIKE ? OR mcode LIKE ? OR spec LIKE ? OR unit LIKE ? OR batch LIKE ? OR source LIKE ? OR barcode LIKE ? OR code LIKE ?)'); const l = `%${q}%`; args.push(l, l, l, l, l, l, l, l); }
   const w = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
   const rows = sall(`SELECT * FROM medicines ${w} ORDER BY expire_date, id DESC`, ...args);
   for (const r of rows) Object.assign(r, medFlowInfo(r.sku_id));
@@ -5084,21 +5147,41 @@ app.get('/api/medicines', wrap((req, res) => {
 app.post('/api/medicines', wrap((req, res) => {
   const b = req.body || {}; const name = String(b.name || '').trim(); if (!name) throw new Error('药品名称必填');
   const d = k => normDate(b[k]);   // 生产日期 / 有效期 / 入库日期：只到年月的按当月 1 日
-  const r = iMed.run(name, String(b.mcode || '').trim(), String(b.spec || '').trim(), String(b.batch || '').trim(), d('prod_date'), d('expire_date'), d('in_date'), String(b.source || '').trim(), String(b.barcode || '').trim(), String(b.code || '').trim(), String(b.remark || '').trim(), now());
+  const code0 = String(b.code || '').trim();
+  medAssertCodeUnique(code0);   // 追溯码唯一，不可重复
+  const r = iMed.run(name, String(b.mcode || '').trim(), String(b.spec || '').trim(), String(b.unit || '').trim(), String(b.batch || '').trim(), d('prod_date'), d('expire_date'), d('in_date'), String(b.source || '').trim(), String(b.barcode || '').trim(), code0, String(b.remark || '').trim(), now());
   const med = sget('SELECT * FROM medicines WHERE id=?', Number(r.lastInsertRowid));
   const skuId = medSkuSync(med);
-  if (b.qty !== undefined && String(b.qty).trim() !== '') medSetQty(skuId, b.qty);   // 新建时可先填当前数量
-  ok(res, sget('SELECT * FROM medicines WHERE id=?', med.id));
+  // 数量：显式传了 qty 以传入值为准；没传但填了药品追溯码（用支付宝扫一扫获取，一盒一码）时默认 1
+  if (b.qty !== undefined && String(b.qty).trim() !== '') medSetQty(skuId, b.qty);
+  else if (code0) medSetQty(skuId, 1);
+  const out = sget('SELECT * FROM medicines WHERE id=?', med.id);
+  Object.assign(out, medFlowInfo(out.sku_id));   // 与列表接口口径一致：带上结存 / 出入库小结
+  ok(res, out);
 }));
 app.put('/api/medicines/:id', wrap((req, res) => {
   const id = Number(req.params.id); const c = sget('SELECT * FROM medicines WHERE id=?', id); if (!c) throw new Error('记录不存在');
   const b = req.body || {}; const name = String(b.name ?? c.name).trim(); if (!name) throw new Error('药品名称必填');
   const d = (k, fb) => (normDate(b[k]) || (fb || ''));   // 只到年月的按当月 1 日；空值仍沿用原值
-  db.prepare('UPDATE medicines SET name=?, mcode=?, spec=?, batch=?, prod_date=?, expire_date=?, in_date=?, source=?, barcode=?, code=?, remark=? WHERE id=?')
-    .run(name, String(b.mcode ?? c.mcode).trim(), String(b.spec ?? c.spec).trim(), String(b.batch ?? c.batch).trim(), d('prod_date', c.prod_date), d('expire_date', c.expire_date), d('in_date', c.in_date), String(b.source ?? c.source).trim(), String(b.barcode ?? c.barcode).trim(), String(b.code ?? c.code).trim(), String(b.remark ?? c.remark).trim(), id);
+  medAssertCodeUnique(String(b.code ?? c.code), id);   // 追溯码唯一（改成别人的码会被拦下）
+  db.prepare('UPDATE medicines SET name=?, mcode=?, spec=?, unit=?, batch=?, prod_date=?, expire_date=?, in_date=?, source=?, barcode=?, code=?, remark=? WHERE id=?')
+    .run(name, String(b.mcode ?? c.mcode).trim(), String(b.spec ?? c.spec).trim(), String(b.unit ?? c.unit).trim(), String(b.batch ?? c.batch).trim(), d('prod_date', c.prod_date), d('expire_date', c.expire_date), d('in_date', c.in_date), String(b.source ?? c.source).trim(), String(b.barcode ?? c.barcode).trim(), String(b.code ?? c.code).trim(), String(b.remark ?? c.remark).trim(), id);
   const skuId = medSkuSync(sget('SELECT * FROM medicines WHERE id=?', id)); // 名称 / 物资编码 / 规格 改了要同步给隐藏档案，出入库单才能搜到最新信息
   if (b.qty !== undefined && String(b.qty).trim() !== '') medSetQty(skuId, b.qty);   // 手改数量：写成调整量，结存立即变为所填值
-  ok(res, sget('SELECT * FROM medicines WHERE id=?', id));
+  const out = sget('SELECT * FROM medicines WHERE id=?', id);
+  Object.assign(out, medFlowInfo(out.sku_id));   // 与列表接口口径一致：带上结存 / 出入库小结
+  ok(res, out);
+}));
+// 停用 / 启用：停用后默认不在药品管理页显示，出入库单里也选不到（隐藏档案同步停用）；历史单据与流水不受影响
+app.post('/api/medicines/:id/toggle', wrap((req, res) => {
+  const id = Number(req.params.id);
+  const c = sget('SELECT * FROM medicines WHERE id=?', id); if (!c) throw new Error('记录不存在');
+  const to = c.active ? 0 : 1;
+  db.prepare('UPDATE medicines SET active=? WHERE id=?').run(to, id);
+  if (c.sku_id) db.prepare('UPDATE skus SET active=? WHERE id=?').run(to, c.sku_id);   // 同步隐藏档案：停用后出入库选不到
+  const out = sget('SELECT * FROM medicines WHERE id=?', id);
+  Object.assign(out, medFlowInfo(out.sku_id));
+  ok(res, out);
 }));
 app.delete('/api/medicines/:id', wrap((req, res) => {
   const id = Number(req.params.id);
@@ -5583,7 +5666,7 @@ function buildRemindHtml(tpl) {
   const insA = sall("SELECT * FROM instruments WHERE status='active'");
   add('计量器具·三个月内临期', expiringSoon(insA, r => r.expire_date, 90), r => `<tr><td>${h(r.name)}</td><td>${h(r.serial_no)}</td><td>${r.expire}</td><td><b style="color:#d97706">${r.days_left} 天后到期</b></td></tr>`, '有效期至');
   add('计量器具·已过期', alreadyExpired(insA, r => r.expire_date), r => `<tr><td>${h(r.name)}</td><td>${h(r.serial_no)}</td><td>${r.expire}</td><td><b style="color:#d95459">已过期</b></td></tr>`, '有效期至');
-  const meds = sall('SELECT * FROM medicines');
+  const meds = sall('SELECT * FROM medicines WHERE active=1');
   add('药品·三个月内临期', expiringSoon(meds, r => r.expire_date, 90), r => `<tr><td>${h(r.name)}</td><td>${h(r.code)}</td><td>${r.expire}</td><td><b style="color:#d97706">${r.days_left} 天后到期</b></td></tr>`, '有效期');
   add('药品·已过期', alreadyExpired(meds, r => r.expire_date), r => `<tr><td>${h(r.name)}</td><td>${h(r.code)}</td><td>${r.expire}</td><td><b style="color:#d95459">已过期</b></td></tr>`, '有效期');
   const over = sall("SELECT * FROM loans WHERE status='out' AND due_date!='' AND due_date < ?", t);
@@ -5674,7 +5757,7 @@ function dueNowItems() {
   const leads = dueLeads(); if (!leads.length) return [];
   const t = today(); const cand = [];
   sall("SELECT id,name,serial_no,expire_date FROM instruments WHERE status='active'").forEach(r => cand.push({ kind: 'instr', ref_id: r.id, name: r.name, code: r.serial_no, expire: String(r.expire_date || '') }));
-  sall('SELECT id,name,code,expire_date FROM medicines').forEach(r => cand.push({ kind: 'med', ref_id: r.id, name: r.name, code: r.code, expire: String(r.expire_date || '') }));
+  sall('SELECT id,name,code,expire_date FROM medicines WHERE active=1').forEach(r => cand.push({ kind: 'med', ref_id: r.id, name: r.name, code: r.code, expire: String(r.expire_date || '') }));
   const out = [];
   for (const c of cand) {
     if (!isValidDate(c.expire)) continue;
