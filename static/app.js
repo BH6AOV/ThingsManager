@@ -3045,7 +3045,7 @@ const ABOUT_CFG = {
     started: '2026-09',
     // 累计编写量：按本仓库开发会话记录文本估算（精确计费值取决于所用模型 / 账单，此处按本地记录估算）
     tokensEstimate: '1,181,464,440 tokens',
-    milestone: 'V0.0.0 → V0.10.12',
+    milestone: 'V0.0.0 → V0.10.13',
   },
 };
 // 【赞赏码】各版本自有的默认赞赏码**不放这里**，而是放在「程序目录 / edition.default.json」
@@ -3088,19 +3088,90 @@ function logsBody(body) {
     return;
   }
   const LV = { debug: ['gray', '调试'], info: ['blue', '信息'], warn: ['orange', '警告'], error: ['red', '错误'] };
-  let cfg = { days: 30, level: 'info' }, page = 1;
-  const fil = { level: 'all', user: '', q: '' };
-  const paint = async (pg, reset) => {
-    if (pg != null) page = pg;
-    if (reset) { fil.level = 'all'; fil.user = ''; fil.q = ''; page = 1; }
-    const c = await api('/api/logs/config').catch(() => null); if (c) cfg = c;
-    const qs = new URLSearchParams({ page: String(page), size: '50' });
-    if (fil.level && fil.level !== 'all') qs.set('level', fil.level);
-    if (fil.user) qs.set('user', fil.user);
-    if (fil.q) qs.set('q', fil.q);
-    const d = await api('/api/logs?' + qs.toString()).catch(() => null);
-    const rows = (d && d.rows) || []; const total = (d && d.total) || 0; if (d && d.cfg) cfg = d.cfg;
+  let cfg = { days: 30, level: 'info' };
+  // 两个查询区块（顺序即页面顺序）：① 账号操作日志（只看账号 / 登录 / 权限相关接口）② 全局操作日志（全部写操作）
+  const BLOCKS = [
+    { k: 'acc', ico: '👤', title: '账号操作日志', scope: 'account', plain: true, hint: '只统计<b>账号与权限</b>相关操作：登录 / 退出、初始化管理员、新建 / 修改 / 停用 / 删除账号、修改密码、角色调整，以及外部对接、钉钉等账号验证。每条都写明<b>时间、账号、来源 IP、做了什么、是否成功</b>（失败会写明原因，如“用户名或密码错误”），供日常账号审计使用；日志保留时长与记录等级见上方设置。' },
+    { k: 'all', ico: '🗒️', title: '全局操作日志', scope: '', hint: '' },
+  ];
+  const st = {};
+  BLOCKS.forEach(b => { st[b.k] = { page: 1, fil: { level: 'all', result: 'all', user: '', q: '' } }; });
+  const qsOf = b => {
+    const s = st[b.k];
+    const qs = new URLSearchParams({ page: String(s.page), size: '50' });
+    if (b.scope) qs.set('scope', b.scope);
+    if (s.fil.level && s.fil.level !== 'all') qs.set('level', s.fil.level);
+    if (s.fil.result && s.fil.result !== 'all') qs.set('result', s.fil.result);
+    if (s.fil.user) qs.set('user', s.fil.user);
+    if (s.fil.q) qs.set('q', s.fil.q);
+    return qs.toString();
+  };
+  const rowsHtml = rows => rows.length ? `<table class="tbl"><thead><tr><th style="width:148px">时间</th><th style="width:64px">等级</th><th style="width:110px">用户</th><th style="width:92px">状态</th><th style="width:90px">接口</th><th>操作 / 内容</th></tr></thead>
+    <tbody>${rows.map(x => `<tr>
+      <td class="muted mono" style="font-size:12px">${esc(x.ts)}</td>
+      <td><span class="badge ${(LV[x.level] || LV.info)[0]}">${(LV[x.level] || LV.info)[1]}</span></td>
+      <td class="mono" style="font-size:12px">${esc(x.user || '—')}</td>
+      <td><span class="${x.status >= 500 ? 'badge red' : x.status >= 400 ? 'badge orange' : 'badge gray'}">${x.status || '—'}</span>${x.ms != null ? '<span class="muted" style="font-size:11px"> ' + x.ms + 'ms</span>' : ''}</td>
+      <td class="mono" style="font-size:12px" title="${esc(x.action || '')}">${esc(String(x.action || '').split(' ')[0])}<br><span class="muted">${esc(String(x.action || '').split(' ').slice(1).join(' '))}</span></td>
+      <td><div title="${esc(x.detail || '')}" style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px">${esc(x.detail || '')}</div></td>
+    </tr>`).join('')}</tbody></table>` : emptyBox('🗒️', '暂无匹配的日志记录');
+  const emptyBox = (ico, msg) => `<div class="empty"><div class="big">${ico}</div>${msg}</div>`;
+  // 账号操作日志：给普通用户看 —— 时间 / 账号 / 来源 IP / 做了什么 / 结果（接口路径与状态码藏进悬停提示）
+  const acctRowsHtml = rows => rows.length ? `<table class="tbl"><thead><tr><th style="width:148px">时间</th><th style="width:112px">操作账号</th><th style="width:132px">来源 IP</th><th>操作内容</th><th style="width:76px">结果</th></tr></thead>
+    <tbody>${rows.map(x => { const bad = Number(x.status) >= 400; return `<tr>
+      <td class="muted mono" style="font-size:12px">${esc(x.ts)}</td>
+      <td class="mono" style="font-size:12px">${esc(x.user || '—')}</td>
+      <td class="mono" style="font-size:12px">${esc(x.ip || '—')}</td>
+      <td><div title="${esc(x.action || '')}" style="font-size:13px;line-height:1.55">${esc(x.text || x.detail || '')}</div></td>
+      <td>${bad ? '<span class="badge red">✖ 失败</span>' : '<span class="badge green">✔ 成功</span>'}</td>
+    </tr>`; }).join('')}</tbody></table>` : emptyBox('👤', '暂无匹配的账号操作记录');
+  const cardHtml = (b, d) => {
+    const s = st[b.k]; const rows = (d && d.rows) || []; const total = (d && d.total) || 0;
     const pages = Math.max(1, Math.ceil(total / 50));
+    const id = x => 'lg-' + b.k + '-' + x;
+    return `<div class="card" style="margin-top:14px"><div class="card-head"><h3>${b.ico} ${esc(b.title)}</h3><span class="tag">共 ${total} 条 · 第 ${s.page}/${pages} 页</span></div>
+      <div class="card-body">
+        ${b.hint ? `<div class="hint" style="margin-bottom:10px">${b.hint}</div>` : ''}
+        <div class="toolbar">
+          ${b.plain
+            ? `<select class="input" id="${id('f-result')}" style="width:118px"><option value="all">全部结果</option><option value="ok" ${s.fil.result === 'ok' ? 'selected' : ''}>只看成功</option><option value="fail" ${s.fil.result === 'fail' ? 'selected' : ''}>只看失败</option></select>`
+            : `<select class="input" id="${id('f-level')}" style="width:120px"><option value="all">全部等级</option>${['debug', 'info', 'warn', 'error'].map(x => `<option value="${x}" ${s.fil.level === x ? 'selected' : ''}>${x.toUpperCase()}</option>`).join('')}</select>`}
+          <input class="input" id="${id('f-user')}" placeholder="${b.plain ? '操作账号' : '操作用户'}" value="${esc(s.fil.user)}" style="width:130px">
+          <input class="input grow" id="${id('f-q')}" placeholder="${b.plain ? '搜索 账号 / 操作内容…' : '搜索 接口 / 内容…'}" value="${esc(s.fil.q)}" style="min-width:140px">
+          <button class="btn primary" id="${id('search')}">查询</button>
+          <button class="btn" id="${id('reset')}">重置</button>
+          <button class="btn" id="${id('refresh')}">↻ 刷新</button>
+        </div>
+        <div class="tbl-wrap">${b.plain ? acctRowsHtml(rows) : rowsHtml(rows)}</div>
+        <div class="row-flex" style="justify-content:flex-end;margin-top:12px;gap:8px">
+          <button class="btn sm" id="${id('prev')}" ${s.page <= 1 ? 'disabled' : ''}>‹ 上一页</button>
+          <span class="tag">${s.page} / ${pages}</span>
+          <button class="btn sm" id="${id('next')}" ${s.page >= pages ? 'disabled' : ''}>下一页 ›</button>
+        </div>
+      </div></div>`;
+  };
+  const wire = b => {
+    const s = st[b.k]; const id = x => 'lg-' + b.k + '-' + x;
+    const el = x => $('#' + id(x), body);
+    const readF = () => {
+      const lv = el('f-level'), rf = el('f-result');
+      s.fil.level = (lv && lv.value) || 'all';
+      s.fil.result = (rf && rf.value) || 'all';
+      s.fil.user = ((el('f-user') || {}).value || '').trim();
+      s.fil.q = ((el('f-q') || {}).value || '').trim();
+    };
+    ['f-level', 'f-result', 'f-user', 'f-q'].forEach(x => { const e = el(x); if (e) e.onchange = () => { readF(); s.page = 1; paint(); }; });
+    $('#' + id('search'), body).onclick = () => { readF(); s.page = 1; paint(); };
+    $('#' + id('reset'), body).onclick = () => { s.fil = { level: 'all', result: 'all', user: '', q: '' }; s.page = 1; paint(); };
+    $('#' + id('refresh'), body).onclick = () => paint();
+    const pv = $('#' + id('prev'), body), nx = $('#' + id('next'), body);
+    if (pv) pv.onclick = () => { s.page = Math.max(1, s.page - 1); paint(); };
+    if (nx) nx.onclick = () => { s.page = s.page + 1; paint(); };
+  };
+  const paint = async () => {
+    const c = await api('/api/logs/config').catch(() => null); if (c) cfg = c;
+    const data = {};
+    for (const b of BLOCKS) { data[b.k] = await api('/api/logs?' + qsOf(b)).catch(() => null); if (data[b.k] && data[b.k].cfg) cfg = data[b.k].cfg; }
     body.innerHTML = `
     <div class="card"><div class="card-body" style="max-width:780px">
       <h3 style="margin:0 0 6px">系统日志设置</h3>
@@ -3113,32 +3184,7 @@ function logsBody(body) {
       </div>
       <div class="hint" style="margin-top:8px">级别参考：INFO=常规操作；WARN=被拒绝/客户端错误(4xx)；ERROR=服务端错误(5xx)。日志存放在数据目录数据库内（随备份 / 迁移一起带走）。</div>
     </div></div>
-    <div class="card" style="margin-top:14px"><div class="card-head"><h3>全局操作日志</h3><span class="tag">共 ${total} 条 · 第 ${page}/${pages} 页</span></div>
-      <div class="card-body">
-        <div class="toolbar">
-          <select class="input" id="lg-f-level" style="width:120px"><option value="all">全部等级</option>${['debug', 'info', 'warn', 'error'].map(x => `<option value="${x}" ${fil.level === x ? 'selected' : ''}>${x.toUpperCase()}</option>`).join('')}</select>
-          <input class="input" id="lg-f-user" placeholder="操作用户" value="${esc(fil.user)}" style="width:130px">
-          <input class="input grow" id="lg-f-q" placeholder="搜索 接口 / 内容…" value="${esc(fil.q)}" style="min-width:140px">
-          <button class="btn primary" id="lg-search">查询</button>
-          <button class="btn" id="lg-reset">重置</button>
-          <button class="btn" id="lg-refresh">↻ 刷新</button>
-        </div>
-        <div class="tbl-wrap">${rows.length ? `<table class="tbl"><thead><tr><th style="width:148px">时间</th><th style="width:64px">等级</th><th style="width:110px">用户</th><th style="width:92px">状态</th><th style="width:90px">接口</th><th>操作 / 内容</th></tr></thead>
-        <tbody>${rows.map(x => `<tr>
-          <td class="muted mono" style="font-size:12px">${esc(x.ts)}</td>
-          <td><span class="badge ${(LV[x.level] || LV.info)[0]}">${(LV[x.level] || LV.info)[1]}</span></td>
-          <td class="mono" style="font-size:12px">${esc(x.user || '—')}</td>
-          <td><span class="${x.status >= 500 ? 'badge red' : x.status >= 400 ? 'badge orange' : 'badge gray'}">${x.status || '—'}</span>${x.ms != null ? '<span class="muted" style="font-size:11px"> ' + x.ms + 'ms</span>' : ''}</td>
-          <td class="mono" style="font-size:12px" title="${esc(x.action || '')}">${esc(String(x.action || '').split(' ')[0])}<br><span class="muted">${esc(String(x.action || '').split(' ').slice(1).join(' '))}</span></td>
-          <td><div title="${esc(x.detail || '')}" style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px">${esc(x.detail || '')}</div></td>
-        </tr>`).join('')}</tbody></table>` : '<div class="empty"><div class="big">🗒️</div>暂无匹配的日志记录</div>'}</div>
-        <div class="row-flex" style="justify-content:flex-end;margin-top:12px;gap:8px">
-          <button class="btn sm" id="lg-prev" ${page <= 1 ? 'disabled' : ''}>‹ 上一页</button>
-          <span class="tag">${page} / ${pages}</span>
-          <button class="btn sm" id="lg-next" ${page >= pages ? 'disabled' : ''}>下一页 ›</button>
-        </div>
-      </div>
-    </div>`;
+    ${BLOCKS.map(b => cardHtml(b, data[b.k])).join('')}`;
     $('#lg-save', body).onclick = async () => {
       try {
         const hide = loadingBox('保存中…');
@@ -3150,16 +3196,7 @@ function logsBody(body) {
       if (!await confirmBox('将<b>清空全部操作日志</b>（不可恢复）。是否继续？', { okText: '清空全部', danger: true })) return;
       try { const hide = loadingBox('清空中…'); try { await api('/api/logs/clear', { method: 'POST', body: '{}' }); } finally { hide(); } toast('已清空'); paint(); } catch (e) { toast(e.message, 'err'); }
     };
-    const readF = () => { fil.level = ($('#lg-f-level', body) || {}).value || 'all'; fil.user = (($('#lg-f-user', body) || {}).value || '').trim(); fil.q = (($('#lg-f-q', body) || {}).value || '').trim(); };
-    $('#lg-f-level', body).onchange = () => { readF(); page = 1; paint(); };
-    $('#lg-f-user', body).onchange = () => { readF(); page = 1; paint(); };
-    $('#lg-f-q', body).onchange = () => { readF(); page = 1; paint(); };
-    $('#lg-search', body).onclick = () => { readF(); page = 1; paint(); };
-    $('#lg-reset', body).onclick = () => paint(1, true);
-    $('#lg-refresh', body).onclick = () => paint();
-    const pv = $('#lg-prev', body), nx = $('#lg-next', body);
-    if (pv) pv.onclick = () => paint(Math.max(1, page - 1));
-    if (nx) nx.onclick = () => paint(page + 1);
+    BLOCKS.forEach(wire);
   };
   paint();
 }
@@ -5399,6 +5436,14 @@ function globalSearchInit() {
  * 更新日志（点击底部版本号弹出，不需单独页面）
  * ============================================================ */
 const CHANGELOG = [
+  {
+    ver: '0.10.13', title: '系统日志新增「账号操作日志」（大白话 + 登录来源 IP）', date: '2026-09',
+    items: [
+      '<b>系统日志新增「账号操作日志」</b>：在「全局操作日志」<b>上方</b>单独列出一块，只看<b>账号与权限</b>相关操作——登录 / 退出、初始化管理员、新建 / 修改 / 停用 / 删除账号、修改密码、角色调整、外部对接与钉钉验证等',
+      '账号日志按<b>一看就懂</b>的方式显示：<b>时间 · 账号 · 来源 IP · 做了什么 · 结果</b>。如「登录成功」「登录失败：用户名或密码错误」「新建账号「小王」，角色：只读用户」「修改账号「小王」：角色 普通用户 → 只读用户」，<b>能直接看到登录是从哪个 IP 来的</b>，不需要看懂接口路径与状态码',
+      '支持按<b>账号</b>、<b>只看成功 / 只看失败</b>、关键词（如“登录”）筛选与翻页；与下方的全局日志各自独立、互不影响',
+    ],
+  },
   {
     ver: '0.10.12', title: '药品加规格 · 新增坏件管理 · 借用单签字与归还补录 · 修复赞赏码丢失', date: '2026-09',
     items: [

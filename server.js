@@ -21,7 +21,7 @@ const { spawnSync, spawn } = require('child_process');
 // 版本号（同步落点：package.json / package-lock.json(两处) / dist/windows/build/ThingsManager.iss(MyAppVer+VersionInfoVersion) /
 //  static/index.html(#ver-chip 与 ?v=) / static/app.js(CHANGELOG 首条 + milestone) / docs 两份）；
 // 规则：修订号 +0.0.1 = 修复与小改动；次版本号 +0.1.0 = 一批新功能 / 准备发版；未发版前的后续改动并入同一版本号不重复升位
-const APP_VERSION = '0.10.12';
+const APP_VERSION = '0.10.13';
 
 const ROOT = __dirname;
 // 运行配置（桌面/安装版使用）：存于安装目录 runtime.config.json —— dataDir 等。
@@ -1312,7 +1312,10 @@ app.use('/api', (req, res, next) => {
     return res.status(403).json({ ok: false, error: '当前账号为只读权限，不能执行写入操作' });
   }
   const t0 = Date.now();
-  const ip = String((req.headers['x-forwarded-for'] || '').split(',')[0] || '').trim() || req.ip || '';
+  const ip = fmtIp(String((req.headers['x-forwarded-for'] || '').split(',')[0] || '').trim() || req.ip || '');
+  // 失败原因（如「用户名或密码错误」）随日志一起记下：账号日志要给普通用户看，得写明为什么失败
+  const origJson = res.json.bind(res);
+  res.json = obj => { try { if (obj && obj.ok === false && obj.error) res.__logErr = String(obj.error); } catch {} return origJson(obj); };
   res.on('finish', () => {
     try {
       const st = res.statusCode || 0;
@@ -1320,12 +1323,18 @@ app.use('/api', (req, res, next) => {
       let user = (req.user && req.user.username) || '';
       if (!user) { const su = sessionUser(req); if (su) user = su.username; }
       const url = String(req.originalUrl || '');
+      const pathname = url.split('?')[0];
       const action = m + ' ' + url;
-      let bodyNote = '';
       const b = req.body;
-      if (b && typeof b === 'object' && !url.startsWith('/api/auth/')) {
+      // 登录 / 初始化这类还没建立会话的接口：用请求体里的用户名回填「账号」列（口令一律不记）
+      if (!user && isAccApi(pathname) && b && typeof b === 'object' && b.username) user = String(b.username).trim().toLowerCase();
+      let bodyNote = '';
+      if (isAccApi(pathname)) {
+        // 账号 / 权限类：写成人人能看懂的一句话（做了什么、对哪个账号、为什么失败）
+        bodyNote = acctLogText(m, pathname, b, st, res.__logErr, req.__logNote, req.__logTarget);
+      } else if (b && typeof b === 'object') {
         try { let s = JSON.stringify(redactBody(b)); if (s.length > 240) s = s.slice(0, 240) + '…'; bodyNote = s.replace(/\s+/g, ' '); } catch {}
-      } else if (b && b.username && url.startsWith('/api/auth/')) { bodyNote = '用户名=' + String(b.username); } // 不记录口令等敏感字段
+      }
       apiLogWrite(level, user, action, bodyNote, st, Date.now() - t0, ip);
     } catch {}
   });
@@ -1388,10 +1397,10 @@ app.post('/api/auth/login', asy(async (req, res) => {
             const rl = ['admin', 'user', 'viewer'].includes(data.user && data.user.role) ? data.user.role : 'user';
             createUser(uname, upass, rl, (data.user && data.user.display_name) || '');
             u = sget('SELECT * FROM users WHERE username=?', uname);
-            logWrite('info', '', 'auth', '外部认证自动建档', 'username=' + uname + ' role=' + rl);
+            logWrite('info', uname, 'auth', '外部认证自动建档', '账号「' + uname + '」由外部认证自动建立，角色：' + roleCn(rl));
           }
         }
-      } catch (e) { logWrite('warn', '', 'auth', '外部认证失败', String((e && e.message) || e)); }
+      } catch (e) { logWrite('warn', uname || '', 'auth', '外部认证失败', '外部认证校验失败：' + String((e && e.message) || e)); }
     }
   }
   if (!u) throw new Error('用户名或密码错误');
@@ -1446,9 +1455,16 @@ app.put('/api/users/:id', wrap((req, res) => {
   const u = sget('SELECT * FROM users WHERE id=?', id);
   if (!u) throw new Error('用户不存在');
   if (u.role === 'super') throw new Error('系统保留超级账号不在此管理中');
+  req.__logTarget = u.username; // 日志里写上被改动的账号，便于事后查阅
   if (String((b.username == null ? u.username : b.username)).trim().toLowerCase() === 'super') throw new Error('“super”为系统保留账号名，不可使用');
   if (b.role && !['admin', 'user', 'viewer'].includes(b.role)) throw new Error('角色仅支持 管理员 / 普通用户 / 只读用户');
   if (b.role && b.role !== u.role && u.role === 'admin' && sget("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND active=1").c <= 1) throw new Error('至少保留一名管理员');
+  const chg = [];
+  if (b.role && b.role !== u.role) chg.push('角色 ' + roleCn(u.role) + ' → ' + roleCn(b.role));
+  if (b.display_name !== undefined && String(b.display_name || '') !== String(u.display_name || '')) chg.push('显示名「' + String(b.display_name || '') + '」');
+  if (b.active !== undefined && (b.active ? 1 : 0) !== (u.active ? 1 : 0)) chg.push(b.active ? '启用账号' : '停用账号');
+  if (b.password) chg.push('重置密码');
+  req.__logNote = chg.join('；');
   if (b.password) {
     const salt = crypto.randomBytes(9).toString('hex');
     db.prepare('UPDATE users SET pass_hash=?, role=?, display_name=?, active=? WHERE id=?').run(salt + ':' + hashPassword(b.password, salt), b.role || u.role, (b.display_name ?? u.display_name) || '', b.active === undefined ? u.active : (b.active ? 1 : 0), id);
@@ -1462,6 +1478,7 @@ app.delete('/api/users/:id', wrap((req, res) => {
   const id = Number(req.params.id);
   const u = sget('SELECT * FROM users WHERE id=?', id);
   if (!u) throw new Error('用户不存在');
+  req.__logTarget = u.username; // 日志里写上被删除的账号（被删后无法再反查，必须记名）
   if (u.role === 'super') throw new Error('系统保留超级账号不可删除');
   if (u.role === 'admin' && sget('SELECT COUNT(*) AS c FROM users WHERE role=\'admin\'').c <= 1) throw new Error('至少保留一名管理员');
   if (req.user && req.user.id === id) throw new Error('不能删除当前登录账号');
@@ -1578,6 +1595,77 @@ function logCleanup() {
     if (days > 0) db.prepare("DELETE FROM app_logs WHERE ts < strftime('%Y-%m-%d %H:%M:%S','now','localtime', ?)").run('-' + days + ' days');
   } catch {}
 }
+/* ---- 账号 / 权限类日志：把接口调用写成人话（给普通用户看，不暴露接口路径与状态码）---- */
+// 账号相关接口前缀（等价于接口文档「会话与账号」分组）：既用于 scope=account 过滤，也用于文案判定
+const ACC_API_PREFIXES = ['/api/auth', '/api/users', '/api/remote/auth', '/api/remote/users', '/api/setup'];
+const LOG_ROLE_CN = { admin: '管理员', user: '普通用户', viewer: '只读用户', super: '超级管理员' };
+function isAccApi(pathname) { const p = String(pathname || '').split('?')[0]; return ACC_API_PREFIXES.some(x => p.startsWith(x)); }
+function roleCn(r) { return LOG_ROLE_CN[r] || String(r || ''); }
+// 来源 IP 归一化：只把 IPv4 映射写法（::ffff:1.2.3.4）还原成 1.2.3.4，其余一律原样显示（回环就写 127.0.0.1 / ::1）
+function fmtIp(ip) {
+  let s = String(ip || '').trim();
+  if (!s) return '';
+  if (s.startsWith('::ffff:')) s = s.slice(7);
+  return s;
+}
+// detail 落库前的二次脱敏（老日志可能带明文口令）
+function maskDetail(d) {
+  return String(d == null ? '' : d).replace(/("?(?:password|passwd|pass|pwd|old|old_password|new_password|next|secret|app_secret|token|peer_token)"?\s*[:=]\s*)("[^"]*"|[^,}\s]+)/gi, '$1•••');
+}
+// 用（已脱敏的）请求体归纳变更点：旧日志没有路由级 note 时的兜底
+function chgFromBody(b) {
+  if (!b || typeof b !== 'object') return '';
+  const out = [];
+  if (b.role) out.push('角色 ' + roleCn(b.role));
+  // 旧版本前端传 enabled、新版传 active：两种都要认（老日志兜底）
+  if (b.active !== undefined || b.enabled !== undefined) out.push((b.active !== undefined ? b.active : b.enabled) ? '启用账号' : '停用账号');
+  if (b.password) out.push('重置密码');
+  if (b.display_name !== undefined) out.push('显示名「' + String(b.display_name || '') + '」');
+  if (b.enable !== undefined) out.push(b.enable ? '启用' : '停用');
+  return out.join('；');
+}
+// 账号日志文案：动作 + 对象 + 变更 + 失败原因
+function acctLogText(m, pathname, body, st, err, note, target) {
+  const failed = Number(st) >= 400;
+  const why = failed && err ? '：' + String(err).slice(0, 120) : '';
+  const p = String(pathname || '').split('?')[0].replace(/\/+$/, '') || '/';
+  const b = body && typeof body === 'object' ? body : null;
+  const uname = b && b.username ? String(b.username) : '';
+  const who = target ? '「' + target + '」' : '';
+  const idm = p.match(/^\/api\/users\/(\d+)$/);
+  const withEnable = failed ? '' : (b && b.enable !== undefined ? '（' + (b.enable ? '已启用' : '已停用') + '）' : '');
+  if (p === '/api/auth/login') return failed ? '登录失败' + why : '登录成功';
+  if (p === '/api/auth/logout') return '退出登录';
+  if (p === '/api/auth/setup') return failed ? '初始化管理员失败' + why : '初始化管理员账号' + (uname ? '「' + uname + '」' : '') + '，并启用登录验证';
+  if (p === '/api/auth/password') return failed ? '修改密码失败' + why : '修改本账号密码（其它设备上的登录已注销）';
+  if (p === '/api/auth/enable') return failed ? '启用登录验证失败' + why : '启用登录验证（此后需登录才能使用）';
+  if (p === '/api/auth/disable') return failed ? '关闭登录验证失败' + why : '关闭登录验证（恢复开放模式）';
+  if (p === '/api/auth/extauth') return (failed ? '保存外部对接验证配置失败' + why : '保存外部对接验证配置') + withEnable;
+  if (p === '/api/auth/dingtalk') return (failed ? '保存钉钉登录配置失败' + why : '保存钉钉登录配置') + withEnable;
+  if (p === '/api/setup/done') return failed ? '标记首次启用完成失败' + why : '标记首次启用引导已完成';
+  if (p === '/api/users') return failed ? '新建账号失败' + why
+    : '新建账号' + (uname ? '「' + uname + '」' : '') + (b && b.role ? '，角色：' + roleCn(b.role) : '') + (b && b.display_name ? '，显示名「' + b.display_name + '」' : '');
+  if (idm) {
+    if (m === 'DELETE') return failed ? '删除账号失败' + why : '删除账号' + (who || ' #' + idm[1]);
+    const tail = note ? '：' + note : (chgFromBody(b) ? '：' + chgFromBody(b) : '');
+    return failed ? '修改账号失败' + why : '修改账号' + (who || ' #' + idm[1]) + tail;
+  }
+  if (p === '/api/remote/auth/verify') return failed ? '互联对端：账号口令校验请求被拒' + why : '互联对端请求校验账号口令';
+  if (p === '/api/remote/users') return failed ? '互联对端：建档账号失败' + why : '互联对端建档账号' + (uname ? '「' + uname + '」' : '');
+  return note ? note : (m + ' ' + p) + (failed ? ' 失败' + why : '');
+}
+// 读日志时给每行生成可读文案：新数据（人话）直接用，老数据按接口路径兜底
+function acctRowText(r) {
+  const d = String((r && r.detail) || '').trim();
+  if (d && !/^[{\[]/.test(d) && !/^(用户名|username)=/i.test(d)) return d;
+  const action = String((r && r.action) || '');
+  const m = action.split(' ')[0] || '';
+  const url = action.slice(m.length + 1);
+  let b = null;
+  if (/^[{\[]/.test(d)) { try { b = JSON.parse(d); } catch { b = null; } }
+  else if (/^(用户名|username)=/i.test(d)) b = { username: d.split('=')[1] || '' };
+  return acctLogText(m, url.split('?')[0], b, Number(r.status) || 200, '', '', '');
+}
 function scheduleLogCleanup() { setTimeout(logCleanup, 5000); setInterval(logCleanup, 10 * 60 * 1000); }
 app.get('/api/logs/config', wrap((req, res) => {
   if (!needAdmin(req, res)) return;
@@ -1604,11 +1692,34 @@ app.get('/api/logs', wrap((req, res) => {
   const where = []; const args = [];
   const lv = String(q.level || 'all');
   if (lv !== 'all' && LOG_LEVEL_RANK[lv]) { where.push('level = ?'); args.push(lv); }
+  // result=ok|fail：按成功 / 失败筛选（对普通用户比日志等级更直观；无状态码的自定义日志视为成功）
+  const resf = String(q.result || 'all');
+  if (resf === 'ok') where.push('(status IS NULL OR status < 400)');
+  else if (resf === 'fail') where.push('status >= 400');
+  // scope=account：只看“账号与权限”相关操作（登录 / 退出 / 初始化 / 账号增删改 / 改密 / 角色与只读 / 外部认证与钉钉 / 互联对端账号）
+  // 判定依据 = 接口路径前缀（等价于接口文档「会话与账号」分组）+ 模块标记 auth（外部认证自动建档等）
+  const scope = String(q.scope || '').trim();
+  if (scope === 'account') {
+    where.push("(module = 'auth' OR " + ACC_API_PREFIXES.map(() => 'action LIKE ?').join(' OR ') + ')');
+    ACC_API_PREFIXES.forEach(p => args.push('%' + p + '%'));
+  }
   if (q.user) { where.push('user LIKE ?'); args.push('%' + String(q.user).replace(/[%_]/g, '') + '%'); }
-  if (q.q) { where.push('(detail LIKE ? OR action LIKE ?)'); const w = '%' + String(q.q).replace(/[%_]/g, '') + '%'; args.push(w, w); }
+  // 关键词：同时搜操作账号 / 内容 / 接口，普通用户一个框就能查到“某个人做了什么”
+  if (q.q) { where.push('(detail LIKE ? OR action LIKE ? OR user LIKE ?)'); const w = '%' + String(q.q).replace(/[%_]/g, '') + '%'; args.push(w, w, w); }
   const W = where.length ? ' WHERE ' + where.join(' AND ') : '';
   const total = sget('SELECT COUNT(*) AS c FROM app_logs' + W, ...args).c;
   const rows = sall('SELECT id,ts,level,module,user,action,detail,ip,status,ms FROM app_logs' + W + ' ORDER BY id DESC LIMIT ? OFFSET ?', ...args, size, (page - 1) * size);
+  // 展示前统一处理：来源 IP 归一化、detail 二次脱敏；账号日志再补一句可读文案（老数据也能看懂）
+  rows.forEach(r => {
+    r.detail = maskDetail(r.detail);
+    r.ip = fmtIp(r.ip);
+    if (scope === 'account') {
+      // 老日志没记操作账号（登录 / 失败登录等），但 detail 里留了“用户名=xxx”，补到「操作账号」列
+      const um = String(r.detail || '').match(/^(?:用户名|username)=(.+)$/i);
+      if (!r.user && um) r.user = String(um[1]).trim();
+      r.text = acctRowText(r);
+    }
+  });
   ok(res, { total, page, size, rows, cfg: logCfg() });
 }));
 app.post('/api/logs/clear', wrap((req, res) => {
@@ -1664,7 +1775,7 @@ const API_DOC_GROUPS = [
     ['POST', '/api/settings', '保存系统设置（常规 / 邮件 / 借用提醒等白名单字段）', 'admin'],
     ['GET', '/api/logs/config', '读取操作日志配置（保留天数 / 记录等级）', 'admin'],
     ['POST', '/api/logs/config', '保存操作日志配置（0 天 = 永久保留）', 'admin'],
-    ['GET', '/api/logs', '操作日志查询（分页；支持 level / user / q 过滤）', 'admin'],
+    ['GET', '/api/logs', '操作日志查询（分页；level / result(ok|fail) / user / q 过滤，scope=account 只看账号与权限相关操作，并附可读文案与来源 IP）', 'admin'],
     ['POST', '/api/logs/clear', '清空操作日志', 'admin'],
     ['GET', '/api/dev/features', '开发者选项：预留功能开关清单'],
     ['POST', '/api/dev/features/:key', '开发者选项：开关某个预留功能（flow / extauth / dingtalk，默认关闭）', 'admin'],
