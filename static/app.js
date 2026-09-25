@@ -246,6 +246,45 @@ function toast(msg, type = 'ok') {
     setTimeout(() => d.remove(), 320);
   }, 2600);
 }
+function copyText(t) {
+  const s = String(t == null ? '' : t);
+  const done = () => toast('已复制');
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = s;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); done();
+    } catch { toast('复制失败，请手动选择复制', 'err'); }
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(s).then(done, fallback);
+  else fallback();
+}
+/* 日期框统一约束：年份只允许 4 位
+ * 不给日期框加 min/max 时，浏览器的「年」段会一直吞数字（实测会变成 202610-10-01 这种 6 位年份，
+ * 结果入库时被判为非法日期而静默丢失）；加上范围后年份段最多收 4 位，多敲的数字会自动流到月份 / 日期上。
+ * 下面再留一道兜底：万一仍出现非 4 位年份，就清空并提示重选。 */
+function guardDateInput(el) {
+  if (!el || el.tagName !== 'INPUT' || el.type !== 'date') return;
+  if (!el.getAttribute('min')) el.setAttribute('min', '1900-01-01');
+  if (!el.getAttribute('max')) el.setAttribute('max', '9999-12-31');
+}
+function bindDateGuards() {
+  document.addEventListener('focusin', e => guardDateInput(e.target), true);
+  document.addEventListener('input', e => {
+    const el = e.target; guardDateInput(el);
+    if (!el || el.tagName !== 'INPUT' || el.type !== 'date') return;
+    const v = String(el.value || '');
+    if (v && !/^\d{4}-/.test(v)) { el.value = ''; toast('年份最多 4 位，请重新选择日期', 'err'); }
+  });
+  // 浏览器在“没填完 / 填得超出范围”时不给 value 也不派发 input（只标 badInput）→ 离开该框时提醒一句，
+  // 否则日期会静默变成空值（年份多敲一位就会出现这种情况）。
+  document.addEventListener('focusout', e => {
+    const el = e.target;
+    if (el && el.tagName === 'INPUT' && el.type === 'date' && el.validity && el.validity.badInput) toast('日期没填完整（年份最多 4 位），请重新选择', 'err');
+  }, true);
+  $$('input[type="date"]').forEach(guardDateInput);
+}
 function confirmBox(msg, { okText = '确定', danger = false } = {}) {
   return new Promise(res => {
     const { el, close } = modal({ title: '请确认', small: true, body: `<p style="margin:4px 0">${esc(msg)}</p>`, foot: `
@@ -324,19 +363,21 @@ function skuSpecText(spec, n = 25) {
   const s = String(spec == null ? '' : spec).replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
-// 物资条目统一显示文案：物资编码|名称 · 规格（25 字截断） · 存放位置（药品的隐藏档案末尾额外标出「药品」）
+// 物资条目统一显示文案：物资编码|名称 · 规格（25 字截断） · 存放位置（药品隐藏档案另带「批号 X」与「药品」）
 function skuOptText(x) {
   const parts = [String(x.name == null ? '' : x.name).trim()].filter(Boolean);
   const sp = skuSpecText(x.spec, 25); if (sp) parts.push(sp);
+  const batch = String(x.med_batch == null ? '' : x.med_batch).trim(); if (batch) parts.push('批号 ' + skuSpecText(batch, 20));
   const loc = String(x.location == null ? '' : x.location).trim(); if (loc) parts.push(loc);
   if (String(x.kind || '') === 'med') parts.push('药品');
   const rest = parts.join(' · ');
   const code = String(x.sku_code == null ? '' : x.sku_code).trim();
   return code ? (rest ? code + '|' + rest : code) : rest;
 }
-// 搜索用的隐藏文本：编码 / 名称 / 规格 / 位置 / 单位都参与匹配（与显示文案一致，都能搜到）
+// 搜索用的隐藏文本：编码 / 名称 / 规格 / 位置 / 单位 / 批号（药品还带“药品”字样）都参与匹配（与显示文案一致，都能搜到）
 function skuOptKey(x) {
-  return [x.sku_code, x.name, x.spec, x.location, x.unit].map(v => String(v == null ? '' : v)).join(' ');
+  const med = String(x.kind || '') === 'med';
+  return [x.sku_code, x.name, x.spec, x.location, x.unit, x.med_batch, med ? '药品' : ''].map(v => String(v == null ? '' : v)).join(' ');
 }
 function skuOptAll(sel) {
   if (!sel._skuAll) sel._skuAll = Array.from(sel.options).map(o => ({ value: o.value, text: o.textContent, key: o.dataset.k || o.textContent }));
@@ -1891,7 +1932,7 @@ function ioPaintLines(v, data) {
             <option value="">— 选择物资 —</option>
             ${skus.map(x => `<option value="${x.id}" data-k="${esc(skuOptKey(x))}" ${l.sku_id == x.id ? 'selected' : ''}>${esc(skuOptText(x))}</option>`).join('')}
           </select>
-          ${s ? `<div class="hint">当前库存：<b>${s.sn_managed ? s.sn_in : s.qty}</b> ${esc(s.unit || '')}${s.sn_managed ? ' · SN 管理' : ''}</div>` : ''}
+          ${s ? `<div class="hint">${String(s.kind || '') === 'med' ? '当前数量' : '当前库存'}：<b>${s.sn_managed ? s.sn_in : s.qty}</b> ${esc(s.unit || '')}${s.sn_managed ? ' · SN 管理' : ''}${s.med_batch ? ' · 批号 ' + esc(s.med_batch) : ''}</div>` : ''}
         </div>
         ${isSn && io.type === 'in' ? `<div class="grow newsn"><span class="lab">SN 序列号（每行一个，可扫码枪连续扫描；也可批量粘贴）</span>
             <textarea class="input mono" data-f="sntext" rows="6" placeholder="SN-1001&#10;SN-1002&#10;…">${esc(l.snText)}</textarea>
@@ -3177,7 +3218,7 @@ const ABOUT_CFG = {
     started: '2026-09',
     // 累计编写量：按本仓库开发会话记录文本估算（精确计费值取决于所用模型 / 账单，此处按本地记录估算）
     tokensEstimate: '1,181,464,440 tokens',
-    milestone: 'V0.0.0 → V0.10.14',
+    milestone: 'V0.0.0 → V0.10.15',
   },
 };
 // 【赞赏码】各版本自有的默认赞赏码**不放这里**，而是放在「程序目录 / edition.default.json」
@@ -4703,6 +4744,7 @@ async function boot() {
   if (_sc) { _sc.onclick = () => _applyCollapsed(!document.body.classList.contains('side-collapsed')); try { _applyCollapsed(localStorage.getItem('thm_side_collapsed') === '1'); } catch {} }
   buildNav();
   ensureUnitOptions();   // 常用单位候选（客户 / 领用部门 / 借用人 等输入框共用；失败不影响主流程）
+  bindDateGuards();      // 日期框：年份最多 4 位（见函数处说明）
   const lo = $('#btn-logout'), uc = $('#user-chip'), ucn = $('#uc-name');
   const showLogout = on => {
     if (uc) { uc.classList.toggle('nav-hidden', !on); if (!on) uc.classList.remove('open'); }
@@ -5008,63 +5050,122 @@ async function renderMedicines(v) {
   const rows = await api('/api/medicines').catch(() => []);
   const fil = { q: '' };
   const DOC_CN = { in: '入库', out: '出库', count: '盘库' };
-  // 库存列：该药已出入库的结存数量（鼠标悬停看最近一次出入库）；从未出入库显示 —
+  // 条码单元格：点数字看一维码（商品条码 69 码 / 药品追溯码）
+  const bcCell = (code, kind) => {
+    const t = String(code || '').trim();
+    if (!t) return '<td class="muted">—</td>';
+    return `<td><span class="bc-link mono" data-bc="${esc(t)}" data-bc-kind="${esc(kind)}" title="点击查看一维码">${esc(t)}</span></td>`;
+  };
+  // 数量列：结存 = 出入库累计 ± 手工调整（悬停看明细；手改过会标「手调」）
   const stockCell = r => {
-    if (!r.io_docs) return '<span class="muted">—</span>';
+    const q = Number(r.stock_qty || 0);
+    const flow = Number(r.flow_qty || 0), ini = Number(r.init_qty || 0);
     const l = r.last_doc || {};
-    const tip = `最近一次：${DOC_CN[l.type] || l.type || ''} ${String(l.doc_at || '').slice(0, 16)} · ${l.doc_no || ''}${l.party ? ' · ' + l.party : ''}${l.operator ? ' · ' + l.operator : ''}`;
-    return `<b title="${esc(tip)}">${Number(r.stock_qty || 0)}</b> <span class="muted" style="font-size:11px" title="${esc(tip)}">（${r.io_docs} 单）</span>`;
+    const tip = [
+      r.io_docs ? `出入库合计 ${flow > 0 ? '+' : ''}${flow}（${r.io_docs} 单）` : '尚无出入库记录',
+      ini ? `手工调整 ${ini > 0 ? '+' : ''}${ini}` : '',
+      r.io_docs ? `最近一次：${DOC_CN[l.type] || l.type || ''} ${String(l.doc_at || '').slice(0, 16)} · ${l.doc_no || ''}${l.party ? ' · ' + l.party : ''}` : '',
+    ].filter(Boolean).join('；');
+    if (!r.io_docs && !ini) return `<span class="muted" title="${esc(tip)}">—</span>`;
+    return `<b title="${esc(tip)}">${q}</b>${r.io_docs ? ` <span class="muted" style="font-size:11px" title="${esc(tip)}">（${r.io_docs} 单）</span>` : ''}${ini ? ` <span class="tag" style="font-size:10px" title="${esc(tip)}">手调</span>` : ''}`;
   };
   const paint = () => {
     const fq = fil.q.trim().toLowerCase();
-    const list = rows.filter(r => !fq || [r.name, r.mcode, r.spec, r.batch, r.source, r.code].some(x => String(x || '').toLowerCase().includes(fq)));
+    const list = rows.filter(r => !fq || [r.name, r.mcode, r.spec, r.batch, r.source, r.barcode, r.code].some(x => String(x || '').toLowerCase().includes(fq)));
     $('#med-body', v).innerHTML = list.length ? list.map(r => `<tr>
       <td class="mono">${esc(r.mcode || '—')}</td><td><b>${esc(r.name)}</b></td><td class="muted">${esc(r.spec || '—')}</td><td class="mono">${esc(r.batch || '—')}</td>
       <td>${esc(r.prod_date || '—')}</td><td>${expCell(r.expire_date)}</td>
-      <td>${esc(r.in_date || '—')}</td><td>${esc(r.source || '—')}</td><td class="mono">${esc(r.code || '—')}</td>
+      <td>${esc(r.in_date || '—')}</td><td>${esc(r.source || '—')}</td>
+      ${bcCell(r.barcode, '商品条码')}${bcCell(r.code, '药品追溯码')}
       <td class="num">${stockCell(r)}</td>
       <td class="muted">${esc(r.remark || '')}</td>
-      <td style="white-space:nowrap"><button class="btn sm" data-act="edit" data-id="${r.id}">编辑</button><button class="btn sm danger" data-act="del" data-id="${r.id}">删除</button></td></tr>`).join('')
-      : '<tr><td colspan="12"><div class="empty"><div class="big">💊</div>暂无药品，点击右上角「＋ 新增药品」登记。</div></td></tr>';
+      <td style="white-space:nowrap"><button class="btn sm" data-act="copy" data-id="${r.id}" title="以本行内容新建一条（改完保存为新行，原行不变）">复制</button><button class="btn sm" data-act="edit" data-id="${r.id}">编辑</button><button class="btn sm danger" data-act="del" data-id="${r.id}">删除</button></td></tr>`).join('')
+      : '<tr><td colspan="13"><div class="empty"><div class="big">💊</div>暂无药品，点击右上角「＋ 新增药品」登记。</div></td></tr>';
   };
   v.innerHTML = `<div class="toolbar">
-    <input class="input" id="med-q" placeholder="搜索 药品名称 / 物资编码 / 规格 / 产品批号 / 来源 / 追溯码" style="min-width:300px">
+    <input class="input" id="med-q" placeholder="搜索 药品名称 / 物资编码 / 规格型号 / 产品批号 / 来源 / 商品条码 / 追溯码" style="min-width:320px">
     <div class="spacer"></div>
     <button class="btn" id="med-tpl">⬇ 导入模板</button>
     <button class="btn" id="med-imp">⬆ 按模板导入</button>
     <button class="btn primary" id="med-new">＋ 新增药品</button></div>
-    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>物资编码</th><th>药品名称</th><th>规格</th><th>产品批号</th><th>生产日期</th><th>有效期</th><th>入库日期</th><th>药品来源</th><th>药品追溯码</th><th class="num">库存</th><th>备注</th><th style="width:150px">操作</th></tr></thead><tbody id="med-body"></tbody></table></div></div>
-    <div class="hint">到期前 90 天内首页会提示；支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记。药品<b>不进入「物资管理」「库存 & 清单」「盘库」</b>：需要出入库时到「出入库」页按<b>物资编码 / 药品名称</b>搜到它（候选中标着「药品」），单据照样生成与打印；出入库后这里的<b>库存</b>列会显示结存与单数，效期 / 批号等信息可随时用「编辑」手改。</div>`;
+    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>物资编码</th><th>药品名称</th><th>规格型号</th><th>产品批号</th><th>生产日期</th><th>有效期</th><th>入库日期</th><th>药品来源</th><th>商品条码</th><th>药品追溯码</th><th class="num">数量</th><th>备注</th><th style="width:200px">操作</th></tr></thead><tbody id="med-body"></tbody></table></div></div>
+    <div class="hint"><b>商品条码</b>（69 码）与<b>药品追溯码</b>（码上放心 20 位）都可以点数字看一维码，方便用扫码枪核对；一维码按 EAN-13 / CODE128 自动选择。到期前 90 天内首页会提示；支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记。<b>数量</b>以出入库单为准（做单会自动加减），需要修正时点「编辑」直接改数量即可（记下手动调整量，悬停可看明细）。同一药品<b>不同批次请分条录入</b>——批号即识别码，出入库单的候选条目会显示批号，各批次数量独立核算。药品<b>不进入「物资管理」「库存 & 清单」「盘库」</b>；出入库请到「出入库」页按物资编码 / 药品名称搜到它（候选中标着「药品」）。</div>`;
   paint();
   $('#med-q', v).oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#med-q', v).value; paint(); }, 200); }; })();
   $('#med-new', v).onclick = () => medicineModal(null, () => renderMedicines(v));
   $('#med-tpl', v).onclick = () => impDownloadTemplate('medicines');
   $('#med-imp', v).onclick = () => impFlow('medicines', () => renderMedicines(v));
   $('#med-body', v).addEventListener('click', e => {
+    const bc = e.target.closest('[data-bc]');
+    if (bc) return barcodeModal(bc.dataset.bc, bc.dataset.bcKind);
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const id = Number(b.dataset.id); const act = b.dataset.act; const r = rows.find(x => x.id === id);
     if (act === 'edit') medicineModal(r, () => renderMedicines(v));
+    else if (act === 'copy') medicineModal(r, () => renderMedicines(v), { copy: true });
     else if (act === 'del') (async () => { if (await confirmBox(`删除药品「${r.name}」？不可恢复。`, { danger: true, okText: '删除' })) { try { await safeRun(() => api(`/api/medicines/${id}`, { method: 'DELETE' })); toast('已删除'); renderMedicines(v); } catch {} } })();
   });
 }
-function medicineModal(item, after) {
-  const { el, close } = modal({ title: item ? '编辑药品' : '新增药品', small: true,
+/* 一维码弹窗：把条码数字渲染成一维码（EAN-13 商品 69 码 / CODE128 追溯码，见 static/vendor/barcode.js） */
+/* 生成一维码：按可用宽度自动选模块尺寸（2~3 像素/模块），尽量整条显示、不缩放失真 */
+function bcSvg(text, maxW) {
+  if (typeof window.barcodeSVG !== 'function') return { ok: false, note: '条码组件未加载（请刷新页面）' };
+  const probe = window.barcodeBits(text);
+  const mod = probe.ok ? Math.max(2, Math.min(3, Math.floor((maxW || 400) / probe.bits.length))) : 2;
+  return window.barcodeSVG(text, { mod, h: probe.ok && probe.bits.length > 150 ? 96 : 110 });
+}
+function barcodeZoom(r, wrapStyle) {
+  if (!r.ok) return `<div class="hint">无法生成一维码：${esc(r.note || '')}</div><div class="mono" style="font-size:16px;word-break:break-all">${esc(r.text || '')}</div>`;
+  const digits = String(r.text || '').replace(/./g, (c, i) => c).trim();
+  return `<div class="bc-wrap"${wrapStyle ? ` style="${wrapStyle}"` : ''}>${r.svg}</div>
+    <div class="bc-digits mono">${esc(digits)}</div>
+    <div class="hint" style="text-align:center;margin-top:2px">格式 <b>${esc(r.format)}</b>${r.note ? ' · ' + esc(r.note) : ''}<br>请把扫码枪对准条码读取（约 ${r.width}×${r.h} 像素，勿再缩小）。</div>`;
+}
+function barcodeModal(text, kind) {
+  const t = String(text || '').trim();
+  const { el, close } = modal({ title: `${kind || '条码'} · 一维码`, small: true,
+    body: `<div id="bc-box"></div>`,
+    foot: `<button class="btn" data-c>关闭</button><button class="btn primary" id="bc-copy">复制数字</button>` });
+  $$('[data-c]', el).forEach(x => x.onclick = close);
+  const r = bcSvg(t, 400);
+  $('#bc-box', el).innerHTML = barcodeZoom(r, 'text-align:center');
+  $('#bc-copy', el).onclick = () => copyText(r.text || t);
+}
+function medicineModal(item, after, opts) {
+  const copy = !!(opts && opts.copy);          // 复制：带入本行内容，但保存为一条新记录
+  const isNew = !item || copy;
+  const { el, close } = modal({ title: copy ? '复制新增药品' : (item ? '编辑药品' : '新增药品'), small: true,
     body: `<label class="field"><span class="lab">药品名称 *</span><input class="input" id="md-name" value="${esc(item ? item.name : '')}"></label>
-      <label class="field"><span class="lab">规格</span><input class="input" id="md-spec" value="${esc(item ? item.spec : '')}" placeholder="如 0.25g×24粒/盒"></label>
+      <label class="field"><span class="lab">规格型号</span><input class="input" id="md-spec" value="${esc(item ? item.spec : '')}" placeholder="如 0.25g×24粒/盒"></label>
       <div class="split"><label class="field"><span class="lab">物资编码</span><input class="input mono" id="md-mcode" value="${esc(item ? item.mcode : '')}" placeholder="药品自己的物资编码（不进物资管理）"></label>
       <label class="field"><span class="lab">产品批号</span><input class="input mono" id="md-batch" value="${esc(item ? item.batch : '')}" placeholder="如 240315A"></label></div>
+      <div class="split"><label class="field"><span class="lab">数量（可手改）</span><input class="input num" type="number" min="0" id="md-qty" value="${item ? Number(item.stock_qty || 0) : 0}"></label>
+      <label class="field"><span class="lab">商品条码（69 码）</span><span style="display:flex;gap:6px"><input class="input mono" id="md-bar" value="${esc(item ? item.barcode : '')}" placeholder="如 6901234567892"><button class="btn sm" type="button" id="md-bar-view" title="预览一维码">▥</button></span></label></div>
+      <div class="split"><label class="field"><span class="lab">药品追溯码</span><span style="display:flex;gap:6px"><input class="input mono" id="md-code" value="${esc(item ? item.code : '')}" placeholder="码上放心 20 位追溯码"><button class="btn sm" type="button" id="md-code-view" title="预览一维码">▥</button></span></label>
+      <label class="field"><span class="lab">备注</span><input class="input" id="md-rmk" value="${esc(item ? item.remark : '')}"></label></div>
+      <div id="md-bc" style="margin:-4px 0 10px"></div>
       <div class="split"><label class="field"><span class="lab">生产日期</span><input class="input" type="date" id="md-prod" value="${esc(item ? item.prod_date : '')}"></label>
       <label class="field"><span class="lab">有效期 *</span><input class="input" type="date" id="md-exp" value="${esc(item ? item.expire_date : '')}"></label></div>
       <div class="split"><label class="field"><span class="lab">入库日期</span><input class="input" type="date" id="md-in" value="${esc(item ? item.in_date : TODAY())}"></label>
       <label class="field"><span class="lab">药品来源</span><input class="input" id="md-src" value="${esc(item ? item.source : '')}" placeholder="如 药房/供应商"></label></div>
-      <label class="field"><span class="lab">药品追溯码</span><input class="input mono" id="md-code" value="${esc(item ? item.code : '')}"></label>
-      <label class="field"><span class="lab">备注</span><input class="input" id="md-rmk" value="${esc(item ? item.remark : '')}"></label>`,
+      ${copy ? `<div class="hint">已带入原条目内容，<b>保存后会新增一条</b>（原条目不变）。请把<b>产品批号 / 商品条码 / 追溯码 / 数量</b>改成这一批的实际情况；数量填的是新条目的当前数量。</div>`
+        : item ? `<div class="hint">当前数量 ${Number(item.stock_qty || 0)} = 出入库合计 ${Number(item.flow_qty || 0) > 0 ? '+' : ''}${Number(item.flow_qty || 0)}${Number(item.init_qty || 0) ? ` ± 手工调整 ${Number(item.init_qty || 0) > 0 ? '+' : ''}${Number(item.init_qty || 0)}` : ''}。直接改上面的数量即以该值为准（出入库会继续在上面加减）。</div>`
+        : '<div class="hint">同一药品不同批次请分条录入（批号即识别码）。初始数量可先填，也可只走出入库单。</div>'}`,
     foot: `<button class="btn" data-c>取消</button><button class="btn primary" id="md-save">保存</button>` });
   $$('[data-c]', el).forEach(x => x.onclick = close);
+  // 一维码即时预览（在弹窗内就地显示，不再叠一层弹窗）
+  const showBc = (inputId, kind) => {
+    const t = String($(inputId, el).value || '').trim();
+    const box = $('#md-bc', el);
+    if (!t) { box.innerHTML = `<div class="hint" style="color:var(--warn)">请先填写${esc(kind)}</div>`; return; }
+    const r = bcSvg(t, 380);
+    box.innerHTML = barcodeZoom(r, 'text-align:center');
+  };
+  $('#md-bar-view', el).onclick = () => showBc('#md-bar', '商品条码');
+  $('#md-code-view', el).onclick = () => showBc('#md-code', '药品追溯码');
   $('#md-save', el).onclick = async () => {
-    const body = { name: $('#md-name', el).value.trim(), mcode: $('#md-mcode', el).value.trim(), spec: $('#md-spec', el).value.trim(), batch: $('#md-batch', el).value.trim(), prod_date: $('#md-prod', el).value, expire_date: $('#md-exp', el).value, in_date: $('#md-in', el).value, source: $('#md-src', el).value.trim(), code: $('#md-code', el).value.trim(), remark: $('#md-rmk', el).value.trim() };
+    const body = { name: $('#md-name', el).value.trim(), mcode: $('#md-mcode', el).value.trim(), spec: $('#md-spec', el).value.trim(), batch: $('#md-batch', el).value.trim(), qty: $('#md-qty', el).value === '' ? undefined : Number($('#md-qty', el).value), prod_date: $('#md-prod', el).value, expire_date: $('#md-exp', el).value, in_date: $('#md-in', el).value, source: $('#md-src', el).value.trim(), barcode: $('#md-bar', el).value.trim(), code: $('#md-code', el).value.trim(), remark: $('#md-rmk', el).value.trim() };
     if (!body.name) return toast('药品名称必填', 'err');
-    try { await safeRun(() => api(item ? `/api/medicines/${item.id}` : '/api/medicines', { method: item ? 'PUT' : 'POST', body: JSON.stringify(body) })); toast('已保存'); close(); after && after(); } catch {}
+    try { await safeRun(() => api(isNew ? '/api/medicines' : `/api/medicines/${item.id}`, { method: isNew ? 'POST' : 'PUT', body: JSON.stringify(body) })); toast(copy ? '已新增一条' : '已保存'); close(); after && after(); } catch {}
   };
 }
 
@@ -5581,6 +5682,19 @@ function globalSearchInit() {
  * 更新日志（点击底部版本号弹出，不需单独页面）
  * ============================================================ */
 const CHANGELOG = [
+  {
+    ver: '0.10.15', title: '药品支持数量管理（出入库自动加减，也可手改）', date: '2026-09',
+    items: [
+      '<b>药品新增「数量」列</b>：数量 = 出入库单累计 ± 手工调整——做出入库会自动加减；需要修正时在「编辑」里直接改数量即以该值为准（列表里会标「手调」，鼠标悬停可看到出入库合计 / 手工调整 / 最近一次出入库）',
+      '同一药品的<b>不同批次请分条录入</b>（批号即识别码）：出入库单的候选条目会显示「物资编码|名称 · 规格 · <b>批号 xxx</b> · 药品」，各批次数量独立核算；出库会校验该批次数量是否够，不够会拦下',
+      '出入库单选中药品时显示的是<b>该批次当前数量</b>（实时取药品表数据），单据保存后药品表的数量立即跟随更新',
+      '「药品管理」新增<b>商品条码（69 码）</b>列（在「药品追溯码」前面），搜索、新增 / 编辑、按模板导入都支持；原来的「规格」这一列改名为<b>规格型号</b>',
+      '<b>条码可以点开看一维码</b>：点一下商品条码或药品追溯码的数字，会弹出对应的<b>一维码</b>（商品 69 码按 EAN-13 生成、追溯码按 CODE128 生成，12 位数字自动补校验位），可以直接对着屏幕用扫码枪核对；新增 / 编辑药品时也能就地预览一维码',
+      '药品操作列新增<b>「复制」</b>按钮：点它会把本行内容带进「新增药品」窗口（改完保存即为一条新条目）——同一药品的不同批次这样录最快',
+      '日期框的<b>年份最多 4 位</b>：以前在日期框里多敲数字，年份会被撑到 5、6 位（如 202610-10-01）导致这个日期根本存不进去；现在年份只收 4 位，多敲的数字自动顺延到月份 / 日期，实在没填完整时会提示「日期没填完整，请重新选择」',
+      '<b>「只到年月」的日期按当月 1 日登记</b>：导入 Excel 或接口里写「2027-03」「2027年3月」「202703」这类只到月份的日期（药品的生产日期 / 有效期、计量器具的有效期至 / 上次检测日期），自动按 <b>2027-03-01</b> 存；同时挡掉 2026-02-30、2026-13-01 这种不存在的日期',
+    ],
+  },
   {
     ver: '0.10.14', title: '药品支持物资编码 / 产品批号，出入库单可直接用药品', date: '2026-09',
     items: [

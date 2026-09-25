@@ -242,6 +242,13 @@ a.link:hover { text-decoration: underline; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .newsn textarea { font-family: Consolas, monospace; }
 .tag { font-size: 11px; color: var(--muted); }
+/* 条码：列表里点数字看一维码（药品管理的商品条码 / 追溯码） */
+.bc-link { border-bottom: 1px dashed var(--brand); color: var(--brand); cursor: pointer; word-break: break-all; }
+.bc-link:hover { background: #eef4ff; }
+.bc-wrap { display: flex; padding: 10px 6px 6px; background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+/* 一维码不缩放（缩了会发虚、扫不出），容器太窄时横向滚动；margin:auto 居中且两端都能滚到 */
+.bc-wrap svg { margin: auto; flex: 0 0 auto; }
+.bc-digits { text-align: center; font-size: 15px; letter-spacing: 2px; margin-top: 6px; word-break: break-all; }
 .sn-cell { max-width: 220px; white-space: pre-wrap; font-family: Consolas, monospace; font-size: 12px; line-height: 1.4; }
 .dl { margin: 0; display: grid; grid-template-columns: 96px 1fr; gap: 6px 12px; }
 .dl dt { color: var(--muted); }

@@ -21,7 +21,7 @@ const { spawnSync, spawn } = require('child_process');
 // 版本号（同步落点：package.json / package-lock.json(两处) / dist/windows/build/ThingsManager.iss(MyAppVer+VersionInfoVersion) /
 //  static/index.html(#ver-chip 与 ?v=) / static/app.js(CHANGELOG 首条 + milestone) / docs 两份）；
 // 规则：修订号 +0.0.1 = 修复与小改动；次版本号 +0.1.0 = 一批新功能 / 准备发版；未发版前的后续改动并入同一版本号不重复升位
-const APP_VERSION = '0.10.14';
+const APP_VERSION = '0.10.15';
 
 const ROOT = __dirname;
 // 运行配置（桌面/安装版使用）：存于安装目录 runtime.config.json —— dataDir 等。
@@ -309,6 +309,8 @@ ensureColumn('skus', 'location_id', 'INTEGER DEFAULT NULL'); // 存放位置唯�
 // kind：'sku' = 真正的物资（物资管理 / 库存 / 盘库都按它统计）；'med' = 药品的“隐藏档案”（只服务于出入库单，
 // 不出现在物资管理 / 库存清单 / 盘库里）——药品台账维护在独立的 medicines 表，物资编码也是药品自己的字段。
 ensureColumn('skus', 'kind', "TEXT NOT NULL DEFAULT 'sku'");
+// init_qty：手工调整量（药品“数量”可手改，写成此值；结存 = init_qty + 出入库流水）。普通物资恒为 0。
+ensureColumn('skus', 'init_qty', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('document_lines', 'location', "TEXT NOT NULL DEFAULT ''"); // 明细行存放位置（旧库补齐；出入库单按行记录，默认取物资的存放位置）
 // 迁移：users.role 预留 'super'（系统超级账号 · 中心服务器远程集控预留，最高读写权限）与 'viewer'（只读账号）
 (function migrateRoles() {
@@ -521,6 +523,7 @@ ensureColumn('instruments', 'spec', "TEXT NOT NULL DEFAULT ''"); // 计量器具
 ensureColumn('medicines', 'spec', "TEXT NOT NULL DEFAULT ''"); // 药品 规格/包装规格
 ensureColumn('medicines', 'mcode', "TEXT NOT NULL DEFAULT ''"); // 物资编码（药品自己的编码，不进物资管理）
 ensureColumn('medicines', 'batch', "TEXT NOT NULL DEFAULT ''"); // 产品批号
+ensureColumn('medicines', 'barcode', "TEXT NOT NULL DEFAULT ''"); // 商品条码（69 码 / EAN-13，可点开看一维码）
 // 药品对应的“隐藏档案”skus.id：出入库单靠它记账，物资管理页看不到（详见上方 skus.kind 说明）
 ensureColumn('medicines', 'sku_id', 'INTEGER DEFAULT NULL');
 // 开站导入的“冲红”台账：记录某张开站(期初)导入单新建了哪些 sku/category/location，
@@ -549,7 +552,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS app_logs(
 );`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_app_logs_ts ON app_logs(ts);');
 const iInst = db.prepare('INSERT INTO instruments(name,serial_no,spec,location,status,last_date,expire_date,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
-const iMed = db.prepare('INSERT INTO medicines(name,mcode,spec,batch,prod_date,expire_date,in_date,source,code,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)');
+const iMed = db.prepare('INSERT INTO medicines(name,mcode,spec,batch,prod_date,expire_date,in_date,source,barcode,code,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
 const iDmg = db.prepare('INSERT INTO damaged_items(sku_id,sku_code,name,spec,unit,location,qty,sn,reason,status,operator,date,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
 const iOff = db.prepare('INSERT INTO office_items(code,name,spec,unit,qty,category_id,location,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
 const iLoan = db.prepare('INSERT INTO loans(kind,doc_out_id,doc_in_id,borrower,contact,sku_id,sku_code,name,spec,unit,sn_managed,qty,sn,loan_date,due_date,remind_days,status,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
@@ -583,6 +586,23 @@ function escSnList(sns) { const out = []; const seen = new Set(); for (let s of 
 function addDays(iso, n) { const d = new Date(String(iso).slice(0, 10) + 'T00:00:00'); if (isNaN(d)) return iso; d.setDate(d.getDate() + n); const p = x => String(x).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
 function daysBetween(fromIso, toIso) { const a = new Date(String(fromIso).slice(0, 10) + 'T00:00:00'); const b = new Date(String(toIso).slice(0, 10) + 'T00:00:00'); if (isNaN(a) || isNaN(b)) return null; return Math.round((b - a) / 86400000); }
 function isValidDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '').trim()); }
+// 「只到年月」的写法（2027-03 / 2027/3 / 2027.3 / 2027年3月 / 202703）→ 当月 1 日
+// 用于生产日期 / 有效期这类“只记得住年月”的场景（作者 2026-09-26 要求：年份不得超四位，只到月的按当月 1 日）
+function normMonthDate(s) {
+  const t = String(s == null ? '' : s).trim(); if (!t) return '';
+  let m = t.match(/^(\d{4})\s*[-\/.]\s*(\d{1,2})\s*月?$/);
+  if (!m) m = t.match(/^(\d{4})\s*年\s*(\d{1,2})\s*月?$/);
+  if (!m) m = t.match(/^(\d{4})(\d{2})$/);          // 202703 → 2027-03-01（纯 6 位数字才认，4 位不算）
+  if (!m) return '';
+  const y = +m[1], mo = +m[2];
+  if (!(mo >= 1 && mo <= 12)) return '';
+  return `${y}-${String(mo).padStart(2, '0')}-01`;
+}
+// 日期归一化：完整日期照原样（且必须真实存在），只到年月的按当月 1 日算；都不合规则返回空串
+function normDate(s) {
+  const t = String(s == null ? '' : s).trim(); if (!t) return '';
+  return normMonthDate(t) || validYmd(t);
+}
 // 严格校验并归一化 YYYY-MM-DD：不只要求格式对，还要求“这一天真实存在”（拒绝 2026-13-99 / 2026-02-30）；
 // 不合法返回空串——用于“单据日期 / 借用日期”这类会直接写库的入参。
 function validYmd(s) {
@@ -615,12 +635,16 @@ function sall(sql, ...p) { return db.prepare(sql).all(...p); }
 function getSetting(key, def) { const r = sget('SELECT value FROM settings WHERE key=?', key); return r ? r.value : def; }
 function setSetting(key, value) { db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value); }
 
-function stockMap() { // sku_id -> 当前库存(按流水累加，始终可重算)
+function stockMap() { // sku_id -> 当前库存（手工调整量 init_qty + 出入库流水，始终可重算）
   const m = new Map();
-  for (const r of sall('SELECT sku_id, SUM(qty) AS q FROM document_lines GROUP BY sku_id')) if (r.q) m.set(r.sku_id, r.q);
+  for (const r of sall('SELECT id, init_qty FROM skus')) if (r.init_qty) m.set(r.id, r.init_qty);
+  for (const r of sall('SELECT sku_id, SUM(qty) AS q FROM document_lines GROUP BY sku_id')) if (r.q) m.set(r.sku_id, (m.get(r.sku_id) || 0) + r.q);
   return m;
 }
-function stockOf(sku_id) { return sget('SELECT COALESCE(SUM(qty),0) AS q FROM document_lines WHERE sku_id=?', sku_id).q; }
+function stockOf(sku_id) {
+  const s = skuById(sku_id);
+  return ((s && s.init_qty) || 0) + sget('SELECT COALESCE(SUM(qty),0) AS q FROM document_lines WHERE sku_id=?', sku_id).q;
+}
 function snInCount(sku_id) { return sget("SELECT COUNT(*) AS c FROM serial_numbers WHERE sku_id=? AND status='in'", sku_id).c; }
 function inStockSns(sku_id) { return sall("SELECT * FROM serial_numbers WHERE sku_id=? AND status='in' ORDER BY in_at, id", sku_id); }
 
@@ -2357,13 +2381,13 @@ app.get('/api/skus', wrap((req, res) => {
   if (cat) { cond.push('s.category_id=?'); args.push(cat); }
   if (q) { cond.push('(s.sku_code LIKE ? OR s.name LIKE ? OR s.spec LIKE ?)'); const l = `%${q}%`; args.push(l, l, l); }
   const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
-  ok(res, sall(`SELECT s.*, c.name AS category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id ${where} ORDER BY s.sku_code`, ...args));
+  ok(res, sall(`SELECT s.*, c.name AS category_name, m.batch AS med_batch FROM skus s LEFT JOIN categories c ON c.id=s.category_id LEFT JOIN medicines m ON m.sku_id=s.id ${where} ORDER BY s.sku_code`, ...args));
 }));
 app.get('/api/skus/all', wrap((req, res) => {
   const onlyMed = req.query.only_med === '1';
   const withMed = req.query.with_med === '1';
   const kind = onlyMed ? "s.kind='med'" : (withMed ? '1=1' : "s.kind='sku'");
-  ok(res, sall(`SELECT s.*, c.name AS category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.active=1 AND ${kind} ORDER BY s.sku_code`));
+  ok(res, sall(`SELECT s.*, c.name AS category_name, m.batch AS med_batch FROM skus s LEFT JOIN categories c ON c.id=s.category_id LEFT JOIN medicines m ON m.sku_id=s.id WHERE s.active=1 AND ${kind} ORDER BY s.sku_code`));
 }));
 app.post('/api/skus', wrap((req, res) => {
   const b = req.body;
@@ -2428,7 +2452,7 @@ app.get('/api/stock', wrap((req, res) => {
   // 默认不含药品的隐藏档案（库存&清单 / 盘库 都不该出现药品）；出入库页用 only_med=1 单独取一份带库存的药品档案
   const onlyMed = req.query.only_med === '1';
   const kind = onlyMed ? "s.kind='med'" : (req.query.with_med === '1' ? '1=1' : "s.kind='sku'");
-  const rows = sall(`SELECT s.*, c.name AS category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.active=1 AND ${kind} ORDER BY s.sku_code`).map(sku => {
+  const rows = sall(`SELECT s.*, c.name AS category_name, m.batch AS med_batch FROM skus s LEFT JOIN categories c ON c.id=s.category_id LEFT JOIN medicines m ON m.sku_id=s.id WHERE s.active=1 AND ${kind} ORDER BY s.sku_code`).map(sku => {
     const qty = stock.get(sku.id) || 0;
     const inSn = sku.sn_managed ? snInCount(sku.id) : null;
     return { ...sku, qty: sku.sn_managed ? inSn : qty, stock_qty: qty, sn_in: inSn, sn_total: sku.sn_managed ? sget('SELECT COUNT(*) AS c FROM serial_numbers WHERE sku_id=?', sku.id).c : 0 };
@@ -4768,6 +4792,7 @@ const IMP_SPECS = {
       { key: 'mcode', label: '物资编码', aliases: ['物资编码', '物资编号'] },
       { key: 'spec', label: '规格', aliases: ['规格', '规格型号', '型号', '包装规格'] },
       { key: 'batch', label: '产品批号', aliases: ['产品批号', '批号', '生产批号'] },
+      { key: 'barcode', label: '商品条码', aliases: ['商品条码', '条形码', '商品条形码', '69码', '69', 'ean13', 'ean-13', 'upc', '条码', '商品编码'] },
       { key: 'code', label: '追溯码/编码', aliases: ['追溯码/编码', '追溯码', '药品追溯码', '药品编码', '编码', '条码'] },
       { key: 'source', label: '来源', aliases: ['来源', '药品来源', '供应商', '厂家'] },
       { key: 'prod_date', label: '生产日期', type: 'date', aliases: ['生产日期'] },
@@ -4823,6 +4848,7 @@ function impToDate(s) {
   if (!m) m = t.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日?$/);
   if (!m) { const m2 = t.match(/^(\d{4})(\d{2})(\d{2})$/); if (m2) m = m2; }
   if (m) { const y = +m[1], mo = +m[2], d = +m[3]; if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`; }
+  const md = normMonthDate(t); if (md) return md;   // 只填到年月（如 2027-03 / 2027年3月）→ 当月 1 日
   const dt = new Date(t); if (!isNaN(dt.getTime())) return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
   return '';
 }
@@ -4838,7 +4864,7 @@ async function buildImpTemplate(spec) {
   help.addRow(['列名', '是否必填', '填写说明']);
   help.getRow(1).font = { bold: true };
   for (const f of spec.fields) {
-    const hint = f.type === 'date' ? '日期，如 2026-09-01（也可 2026/9/1）'
+    const hint = f.type === 'date' ? '日期，如 2026-09-01（也可 2026/9/1）；只记得年月时就写 2027-03 或 2027年3月，会按当月 1 日登记'
       : f.type === 'num' ? '数字（可留空，默认 0）'
         : f.type === 'enum' ? (f.enumText || '按选项填写')
           : '文本';
@@ -4948,7 +4974,7 @@ app.post('/api/import/:kind/xlsx/confirm', wrap((req, res) => {
       if (kind === 'instruments') {
         iInst.run(name, S('serial_no'), S('spec'), S('location'), (r0.status === 'sealed' ? 'sealed' : 'active'), D('last_date'), D('expire_date'), S('remark'), now());
       } else if (kind === 'medicines') {
-        const ri = iMed.run(name, S('mcode'), S('spec'), S('batch'), D('prod_date'), D('expire_date'), D('in_date'), S('source'), S('code'), S('remark'), now());
+        const ri = iMed.run(name, S('mcode'), S('spec'), S('batch'), D('prod_date'), D('expire_date'), D('in_date'), S('source'), S('barcode'), S('code'), S('remark'), now());
         medSkuSync(sget('SELECT * FROM medicines WHERE id=?', Number(ri.lastInsertRowid)));
       } else if (kind === 'office') {
         const ri = iOff.run(S('code'), name, S('spec'), S('unit'), parseInt(r0.qty, 10) || 0, catIdOf(r0.category), S('location'), S('remark'), now());
@@ -4978,14 +5004,14 @@ app.get('/api/instruments', wrap((req, res) => {
 app.post('/api/instruments', wrap((req, res) => {
   const b = req.body || {}; const name = String(b.name || '').trim();
   if (!name) throw new Error('名称必填');
-  const r = iInst.run(name, String(b.serial_no || '').trim(), String(b.spec || '').trim(), String(b.location || '').trim(), 'active', isValidDate(b.last_date) ? String(b.last_date).slice(0, 10) : '', isValidDate(b.expire_date) ? String(b.expire_date).slice(0, 10) : '', String(b.remark || '').trim(), now());
+  const r = iInst.run(name, String(b.serial_no || '').trim(), String(b.spec || '').trim(), String(b.location || '').trim(), 'active', normDate(b.last_date), normDate(b.expire_date), String(b.remark || '').trim(), now());
   ok(res, sget('SELECT * FROM instruments WHERE id=?', Number(r.lastInsertRowid)));
 }));
 app.put('/api/instruments/:id', wrap((req, res) => {
   const id = Number(req.params.id); const c = sget('SELECT * FROM instruments WHERE id=?', id); if (!c) throw new Error('记录不存在');
   const b = req.body || {}; const name = String(b.name ?? c.name).trim(); if (!name) throw new Error('名称必填');
-  const last = isValidDate(b.last_date) ? String(b.last_date).slice(0, 10) : (isValidDate(c.last_date) ? c.last_date : '');
-  const exp = isValidDate(b.expire_date) ? String(b.expire_date).slice(0, 10) : (isValidDate(c.expire_date) ? c.expire_date : '');
+  const last = normDate(b.last_date) || (isValidDate(c.last_date) ? c.last_date : '');
+  const exp = normDate(b.expire_date) || (isValidDate(c.expire_date) ? c.expire_date : '');
   const st = b.status !== undefined ? (b.status === 'sealed' ? 'sealed' : 'active') : c.status;
   db.prepare('UPDATE instruments SET name=?, serial_no=?, spec=?, location=?, last_date=?, expire_date=?, remark=?, status=? WHERE id=?').run(name, String(b.serial_no ?? c.serial_no).trim(), String(b.spec ?? c.spec).trim(), String(b.location ?? c.location).trim(), last, exp, String(b.remark ?? c.remark).trim(), st, id);
   ok(res, sget('SELECT * FROM instruments WHERE id=?', id));
@@ -4993,8 +5019,8 @@ app.put('/api/instruments/:id', wrap((req, res) => {
 // 续期：更新 上次检测日期 与 有效期至（自动解除封存）
 app.post('/api/instruments/:id/renew', wrap((req, res) => {
   const id = Number(req.params.id); const c = sget('SELECT * FROM instruments WHERE id=?', id); if (!c) throw new Error('记录不存在');
-  const last = isValidDate(req.body && req.body.last_date) ? String(req.body.last_date).slice(0, 10) : today();
-  const exp = isValidDate(req.body && req.body.expire_date) ? String(req.body.expire_date).slice(0, 10) : '';
+  const last = normDate(req.body && req.body.last_date) || today();
+  const exp = normDate(req.body && req.body.expire_date);
   if (!exp) throw new Error('请填写新的有效期至');
   db.prepare("UPDATE instruments SET last_date=?, expire_date=?, status='active' WHERE id=?").run(last, exp, id);
   ok(res, sget('SELECT * FROM instruments WHERE id=?', id));
@@ -5028,17 +5054,28 @@ function medSkuSync(m) {
   db.prepare("UPDATE skus SET sku_code=?, name=?, spec=?, kind='med', active=1 WHERE id=?").run(code, name, spec, sku.id);
   return sku.id;
 }
-// 药品的出入库小结：结存数量 + 单据数 + 最近一次流水
+// 药品的出入库小结：结存（手工调整 + 出入库）+ 单据数 + 最近一次流水
 function medFlowInfo(skuId) {
-  if (!skuId) return { stock_qty: 0, io_docs: 0, last_doc: null };
+  if (!skuId) return { stock_qty: 0, flow_qty: 0, init_qty: 0, io_docs: 0, last_doc: null };
+  const sku = skuById(skuId);
   const agg = sget('SELECT COALESCE(SUM(qty),0) AS q, COUNT(DISTINCT doc_id) AS d FROM document_lines WHERE sku_id=?', skuId);
   const last = sget(`SELECT l.qty, d.doc_no, d.type, d.party, d.operator, d.created_at AS doc_at
     FROM document_lines l JOIN documents d ON d.id=l.doc_id WHERE l.sku_id=? ORDER BY l.id DESC LIMIT 1`, skuId);
-  return { stock_qty: agg.q || 0, io_docs: agg.d || 0, last_doc: last || null };
+  const ini = (sku && sku.init_qty) || 0;
+  return { stock_qty: ini + (agg.q || 0), flow_qty: agg.q || 0, init_qty: ini, io_docs: agg.d || 0, last_doc: last || null };
+}
+// 药品「数量」手改：写入手工调整量，使 结存 = 目标值（出入库流水继续照算，两者不互相覆盖）
+function medSetQty(skuId, qty) {
+  if (!skuId) return;
+  const t = parseInt(qty, 10);
+  if (!Number.isFinite(t)) return;
+  if (t < 0) throw new Error('数量不能为负数（可在出入库单里如实记账）');
+  const flow = sget('SELECT COALESCE(SUM(qty),0) AS q FROM document_lines WHERE sku_id=?', skuId).q || 0;
+  db.prepare('UPDATE skus SET init_qty=? WHERE id=?').run(t - flow, skuId);
 }
 app.get('/api/medicines', wrap((req, res) => {
   const q = (req.query.q || '').trim(); const cond = []; const args = [];
-  if (q) { cond.push('(name LIKE ? OR mcode LIKE ? OR spec LIKE ? OR batch LIKE ? OR source LIKE ? OR code LIKE ?)'); const l = `%${q}%`; args.push(l, l, l, l, l, l); }
+  if (q) { cond.push('(name LIKE ? OR mcode LIKE ? OR spec LIKE ? OR batch LIKE ? OR source LIKE ? OR barcode LIKE ? OR code LIKE ?)'); const l = `%${q}%`; args.push(l, l, l, l, l, l, l); }
   const w = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
   const rows = sall(`SELECT * FROM medicines ${w} ORDER BY expire_date, id DESC`, ...args);
   for (const r of rows) Object.assign(r, medFlowInfo(r.sku_id));
@@ -5046,19 +5083,21 @@ app.get('/api/medicines', wrap((req, res) => {
 }));
 app.post('/api/medicines', wrap((req, res) => {
   const b = req.body || {}; const name = String(b.name || '').trim(); if (!name) throw new Error('药品名称必填');
-  const d = k => (isValidDate(b[k]) ? String(b[k]).slice(0, 10) : '');
-  const r = iMed.run(name, String(b.mcode || '').trim(), String(b.spec || '').trim(), String(b.batch || '').trim(), d('prod_date'), d('expire_date'), d('in_date'), String(b.source || '').trim(), String(b.code || '').trim(), String(b.remark || '').trim(), now());
+  const d = k => normDate(b[k]);   // 生产日期 / 有效期 / 入库日期：只到年月的按当月 1 日
+  const r = iMed.run(name, String(b.mcode || '').trim(), String(b.spec || '').trim(), String(b.batch || '').trim(), d('prod_date'), d('expire_date'), d('in_date'), String(b.source || '').trim(), String(b.barcode || '').trim(), String(b.code || '').trim(), String(b.remark || '').trim(), now());
   const med = sget('SELECT * FROM medicines WHERE id=?', Number(r.lastInsertRowid));
-  medSkuSync(med);
+  const skuId = medSkuSync(med);
+  if (b.qty !== undefined && String(b.qty).trim() !== '') medSetQty(skuId, b.qty);   // 新建时可先填当前数量
   ok(res, sget('SELECT * FROM medicines WHERE id=?', med.id));
 }));
 app.put('/api/medicines/:id', wrap((req, res) => {
   const id = Number(req.params.id); const c = sget('SELECT * FROM medicines WHERE id=?', id); if (!c) throw new Error('记录不存在');
   const b = req.body || {}; const name = String(b.name ?? c.name).trim(); if (!name) throw new Error('药品名称必填');
-  const d = (k, fb) => (isValidDate(b[k]) ? String(b[k]).slice(0, 10) : (fb || ''));
-  db.prepare('UPDATE medicines SET name=?, mcode=?, spec=?, batch=?, prod_date=?, expire_date=?, in_date=?, source=?, code=?, remark=? WHERE id=?')
-    .run(name, String(b.mcode ?? c.mcode).trim(), String(b.spec ?? c.spec).trim(), String(b.batch ?? c.batch).trim(), d('prod_date', c.prod_date), d('expire_date', c.expire_date), d('in_date', c.in_date), String(b.source ?? c.source).trim(), String(b.code ?? c.code).trim(), String(b.remark ?? c.remark).trim(), id);
-  medSkuSync(sget('SELECT * FROM medicines WHERE id=?', id)); // 名称 / 物资编码 / 规格 改了要同步给隐藏档案，出入库单才能搜到最新信息
+  const d = (k, fb) => (normDate(b[k]) || (fb || ''));   // 只到年月的按当月 1 日；空值仍沿用原值
+  db.prepare('UPDATE medicines SET name=?, mcode=?, spec=?, batch=?, prod_date=?, expire_date=?, in_date=?, source=?, barcode=?, code=?, remark=? WHERE id=?')
+    .run(name, String(b.mcode ?? c.mcode).trim(), String(b.spec ?? c.spec).trim(), String(b.batch ?? c.batch).trim(), d('prod_date', c.prod_date), d('expire_date', c.expire_date), d('in_date', c.in_date), String(b.source ?? c.source).trim(), String(b.barcode ?? c.barcode).trim(), String(b.code ?? c.code).trim(), String(b.remark ?? c.remark).trim(), id);
+  const skuId = medSkuSync(sget('SELECT * FROM medicines WHERE id=?', id)); // 名称 / 物资编码 / 规格 改了要同步给隐藏档案，出入库单才能搜到最新信息
+  if (b.qty !== undefined && String(b.qty).trim() !== '') medSetQty(skuId, b.qty);   // 手改数量：写成调整量，结存立即变为所填值
   ok(res, sget('SELECT * FROM medicines WHERE id=?', id));
 }));
 app.delete('/api/medicines/:id', wrap((req, res) => {
