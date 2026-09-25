@@ -21,7 +21,7 @@ const { spawnSync, spawn } = require('child_process');
 // 版本号（同步落点：package.json / package-lock.json(两处) / dist/windows/build/ThingsManager.iss(MyAppVer+VersionInfoVersion) /
 //  static/index.html(#ver-chip 与 ?v=) / static/app.js(CHANGELOG 首条 + milestone) / docs 两份）；
 // 规则：修订号 +0.0.1 = 修复与小改动；次版本号 +0.1.0 = 一批新功能 / 准备发版；未发版前的后续改动并入同一版本号不重复升位
-const APP_VERSION = '0.10.13';
+const APP_VERSION = '0.10.14';
 
 const ROOT = __dirname;
 // 运行配置（桌面/安装版使用）：存于安装目录 runtime.config.json —— dataDir 等。
@@ -306,6 +306,9 @@ ensureColumn('skus', 'category_id', 'INTEGER DEFAULT NULL');
 ensureColumn('locations', 'parent_id', 'INTEGER DEFAULT NULL');
 ensureColumn('skus', 'low_watch', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('skus', 'location_id', 'INTEGER DEFAULT NULL'); // 存放位置唯一引用（名称允许重复，靠 id 区分）
+// kind：'sku' = 真正的物资（物资管理 / 库存 / 盘库都按它统计）；'med' = 药品的“隐藏档案”（只服务于出入库单，
+// 不出现在物资管理 / 库存清单 / 盘库里）——药品台账维护在独立的 medicines 表，物资编码也是药品自己的字段。
+ensureColumn('skus', 'kind', "TEXT NOT NULL DEFAULT 'sku'");
 ensureColumn('document_lines', 'location', "TEXT NOT NULL DEFAULT ''"); // 明细行存放位置（旧库补齐；出入库单按行记录，默认取物资的存放位置）
 // 迁移：users.role 预留 'super'（系统超级账号 · 中心服务器远程集控预留，最高读写权限）与 'viewer'（只读账号）
 (function migrateRoles() {
@@ -516,6 +519,10 @@ ensureColumn('loans', 'kind', "TEXT NOT NULL DEFAULT 'lend'"); // lend=借出(�
 ensureColumn('loans', 'remind_days', 'INTEGER'); // 每笔借用独立的“借期提醒天数”（用于超期/临期预警）
 ensureColumn('instruments', 'spec', "TEXT NOT NULL DEFAULT ''"); // 计量器具 型号/规格
 ensureColumn('medicines', 'spec', "TEXT NOT NULL DEFAULT ''"); // 药品 规格/包装规格
+ensureColumn('medicines', 'mcode', "TEXT NOT NULL DEFAULT ''"); // 物资编码（药品自己的编码，不进物资管理）
+ensureColumn('medicines', 'batch', "TEXT NOT NULL DEFAULT ''"); // 产品批号
+// 药品对应的“隐藏档案”skus.id：出入库单靠它记账，物资管理页看不到（详见上方 skus.kind 说明）
+ensureColumn('medicines', 'sku_id', 'INTEGER DEFAULT NULL');
 // 开站导入的“冲红”台账：记录某张开站(期初)导入单新建了哪些 sku/category/location，
 // 撤回该期初单时据此回滚（仍有他处引用则保留）——会计意义上的“冲红”撤销整批导入。
 db.exec(`CREATE TABLE IF NOT EXISTS opening_imports(
@@ -542,7 +549,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS app_logs(
 );`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_app_logs_ts ON app_logs(ts);');
 const iInst = db.prepare('INSERT INTO instruments(name,serial_no,spec,location,status,last_date,expire_date,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
-const iMed = db.prepare('INSERT INTO medicines(name,spec,prod_date,expire_date,in_date,source,code,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
+const iMed = db.prepare('INSERT INTO medicines(name,mcode,spec,batch,prod_date,expire_date,in_date,source,code,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)');
 const iDmg = db.prepare('INSERT INTO damaged_items(sku_id,sku_code,name,spec,unit,location,qty,sn,reason,status,operator,date,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
 const iOff = db.prepare('INSERT INTO office_items(code,name,spec,unit,qty,category_id,location,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
 const iLoan = db.prepare('INSERT INTO loans(kind,doc_out_id,doc_in_id,borrower,contact,sku_id,sku_code,name,spec,unit,sn_managed,qty,sn,loan_date,due_date,remind_days,status,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
@@ -553,6 +560,13 @@ const SKU_SELECT = `SELECT s.*, c.name AS category_name FROM skus s LEFT JOIN ca
 const iDoc = db.prepare('INSERT INTO documents(type,doc_no,party,operator,location,remark,created_at) VALUES(?,?,?,?,?,?,?)');
 const iLine = db.prepare('INSERT INTO document_lines(doc_id,sku_id,sku_code,name,spec,unit,book_qty,actual_qty,qty,sn,remark,location) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
 const iSn = db.prepare('INSERT INTO serial_numbers(sku_id,sn,status,in_doc_id,out_doc_id,in_at,out_at,remark) VALUES(?,?,?,?,?,?,?,?)');
+// 迁移：老库里已登记的药品补建“隐藏档案”，让它们无需重新登记就能直接走出入库单
+(function migrateMedSku() {
+  try {
+    const rows = sall('SELECT * FROM medicines WHERE sku_id IS NULL');
+    for (const m of rows) medSkuSync(m);
+  } catch (e) { console.log('药品档案迁移失败：' + ((e && e.message) || e)); }
+})();
 const uSnOut = db.prepare("UPDATE serial_numbers SET status='out', out_doc_id=?, out_at=?, remark=? WHERE id=?");
 
 /* ---------------- 工具函数 ---------------- */
@@ -1046,7 +1060,7 @@ async function exportInventory(opts) {
   const stock = stockMap();
   const includeSn = !!opts.include_sn;
   const onlyStock = !opts.include_zero;
-  const skus = sall('SELECT * FROM skus WHERE active=1 ORDER BY sku_code');
+  const skus = sall("SELECT * FROM skus WHERE active=1 AND kind='sku' ORDER BY sku_code");
   for (const sku of skus) {
     const qty = stock.get(sku.id) || 0;
     if (onlyStock && !sku.sn_managed && qty === 0) continue; // 数量类0库存默认不显示
@@ -1312,7 +1326,7 @@ app.use('/api', (req, res, next) => {
     return res.status(403).json({ ok: false, error: '当前账号为只读权限，不能执行写入操作' });
   }
   const t0 = Date.now();
-  const ip = fmtIp(String((req.headers['x-forwarded-for'] || '').split(',')[0] || '').trim() || req.ip || '');
+  const ip = clientIpOf(req);
   // 失败原因（如「用户名或密码错误」）随日志一起记下：账号日志要给普通用户看，得写明为什么失败
   const origJson = res.json.bind(res);
   res.json = obj => { try { if (obj && obj.ok === false && obj.error) res.__logErr = String(obj.error); } catch {} return origJson(obj); };
@@ -1608,6 +1622,21 @@ function fmtIp(ip) {
   if (s.startsWith('::ffff:')) s = s.slice(7);
   return s;
 }
+// TCP 对端是否为回环地址（本机直连 / 本机反向代理）
+function isLoopIp(ip) {
+  const s = String(ip || '').replace(/^::ffff:/, '');
+  return s === '::1' || s === 'localhost' || /^127\./.test(s);
+}
+// 真实来源 IP：**以 TCP 连接的对端地址为准**（最精确，不会被中间层改写）；
+// 仅当对端是回环（说明经本机反向代理转发，代理会把客户端写成 X-Forwarded-For）时才采用 XFF 的首段。
+function clientIpOf(req) {
+  const sock = String((req && req.socket && req.socket.remoteAddress) || '');
+  const xff = String(((req && req.headers && req.headers['x-forwarded-for']) || '').split(',')[0] || '').trim();
+  let ip = sock;
+  if (isLoopIp(ip) && xff) ip = xff;
+  if (!ip) ip = xff || String((req && req.ip) || '');
+  return fmtIp(ip);
+}
 // detail 落库前的二次脱敏（老日志可能带明文口令）
 function maskDetail(d) {
   return String(d == null ? '' : d).replace(/("?(?:password|passwd|pass|pwd|old|old_password|new_password|next|secret|app_secret|token|peer_token)"?\s*[:=]\s*)("[^"]*"|[^,}\s]+)/gi, '$1•••');
@@ -1796,9 +1825,11 @@ const API_DOC_GROUPS = [
     ['PUT', '/api/locations/:id', '修改名称（仓库改名会同步其分区与已引用物资）'],
     ['DELETE', '/api/locations/:id', '删除位置（有子分区或被引用则拒绝）'],
     ['POST', '/api/locations/:id/restructure', '结构调整：分区⇄独立仓库、仓库⇄某仓的库位'],
+    ['GET', '/api/common-units', '常用单位列表（客户 / 领用部门 / 借用人 等输入候选）'],
+    ['PUT', '/api/common-units', '保存常用单位列表（body: {units:[…]}，去空去重、每条≤60 字、最多 300 条）'],
   ] },
   { name: '物资 / 库存 / SN', hint: '物资档案、实时库存、序列号管理', items: [
-    ['GET', '/api/skus', '物资列表（支持 q / category / location / unit / all 过滤）'],
+    ['GET', '/api/skus', '物资列表（支持 q / cat / all / with_med / only_med 过滤；默认不含药品的隐藏档案）'],
     ['GET', '/api/skus/all', '物资全量（前端本地筛选用）'],
     ['POST', '/api/skus', '新建物资（允许物资编码重复）'],
     ['PUT', '/api/skus/:id', '修改物资'],
@@ -2291,19 +2322,49 @@ app.post('/api/locations/:id/restructure', wrap((req, res) => {
   throw new Error('未知的调整类型');
 }));
 
+/* ---- 常用单位（客户 / 领用部门 / 借用人 等“非本地部门”输入候选）----
+ * 只做输入时的候选提示，仍允许手写；存在 settings 里（common_units，JSON 数组，随数据包 / 备份一起走）。*/
+function commonUnits() {
+  try {
+    const arr = JSON.parse(getSetting('common_units', '[]'));
+    return Array.isArray(arr) ? arr.map(x => String(x)) : [];
+  } catch { return []; }
+}
+function saveCommonUnits(list) {
+  const out = [];
+  for (const x of (Array.isArray(list) ? list : [])) {
+    const s = String(x == null ? '' : x).replace(/\s+/g, ' ').trim().slice(0, 60);
+    if (s && !out.includes(s)) out.push(s);
+    if (out.length >= 300) break;
+  }
+  setSetting('common_units', JSON.stringify(out));
+  return out;
+}
+app.get('/api/common-units', wrap((req, res) => ok(res, commonUnits())));
+app.put('/api/common-units', wrap((req, res) => ok(res, saveCommonUnits((req.body || {}).units))));
+
 /* ---- SKU ---- */
 app.get('/api/skus', wrap((req, res) => {
   const q = (req.query.q || '').trim();
   const all = req.query.all === '1';
   const cat = req.query.cat ? Number(req.query.cat) : 0;
+  // 默认只看真正的物资（kind='sku'）；药品的隐藏档案只在出入库单里可选到（with_med=1 / only_med=1）
+  const withMed = req.query.with_med === '1';
+  const onlyMed = req.query.only_med === '1';
   const cond = []; const args = [];
+  if (onlyMed) cond.push("s.kind='med'"); else if (!withMed) cond.push("s.kind='sku'");
   if (!all) cond.push('s.active=1');
   if (cat) { cond.push('s.category_id=?'); args.push(cat); }
   if (q) { cond.push('(s.sku_code LIKE ? OR s.name LIKE ? OR s.spec LIKE ?)'); const l = `%${q}%`; args.push(l, l, l); }
   const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
   ok(res, sall(`SELECT s.*, c.name AS category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id ${where} ORDER BY s.sku_code`, ...args));
 }));
-app.get('/api/skus/all', wrap((req, res) => { ok(res, sall('SELECT s.*, c.name AS category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.active=1 ORDER BY s.sku_code')); }));
+app.get('/api/skus/all', wrap((req, res) => {
+  const onlyMed = req.query.only_med === '1';
+  const withMed = req.query.with_med === '1';
+  const kind = onlyMed ? "s.kind='med'" : (withMed ? '1=1' : "s.kind='sku'");
+  ok(res, sall(`SELECT s.*, c.name AS category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.active=1 AND ${kind} ORDER BY s.sku_code`));
+}));
 app.post('/api/skus', wrap((req, res) => {
   const b = req.body;
   if (!b || !b.sku_code || !b.name) throw new Error('编码与名称必填');
@@ -2364,7 +2425,10 @@ app.post('/api/skus/batch-delete', wrap((req, res) => {
 /* ---- 库存 & SN ---- */
 app.get('/api/stock', wrap((req, res) => {
   const stock = stockMap();
-  const rows = sall('SELECT s.*, c.name AS category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.active=1 ORDER BY s.sku_code').map(sku => {
+  // 默认不含药品的隐藏档案（库存&清单 / 盘库 都不该出现药品）；出入库页用 only_med=1 单独取一份带库存的药品档案
+  const onlyMed = req.query.only_med === '1';
+  const kind = onlyMed ? "s.kind='med'" : (req.query.with_med === '1' ? '1=1' : "s.kind='sku'");
+  const rows = sall(`SELECT s.*, c.name AS category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.active=1 AND ${kind} ORDER BY s.sku_code`).map(sku => {
     const qty = stock.get(sku.id) || 0;
     const inSn = sku.sn_managed ? snInCount(sku.id) : null;
     return { ...sku, qty: sku.sn_managed ? inSn : qty, stock_qty: qty, sn_in: inSn, sn_total: sku.sn_managed ? sget('SELECT COUNT(*) AS c FROM serial_numbers WHERE sku_id=?', sku.id).c : 0 };
@@ -2373,7 +2437,7 @@ app.get('/api/stock', wrap((req, res) => {
 }));
 /* ---- 低库存待关注范围：单件 / 按分类批量 设置 ---- */
 app.get('/api/low-watch', wrap((req, res) => {
-  const items = sall('SELECT s.id,s.sku_code,s.name,s.category_id,c.name category_name,COALESCE(s.low_watch,1) low_watch FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.active=1 ORDER BY c.name, s.sku_code, s.id');
+  const items = sall("SELECT s.id,s.sku_code,s.name,s.category_id,c.name category_name,COALESCE(s.low_watch,1) low_watch FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.active=1 AND s.kind='sku' ORDER BY c.name, s.sku_code, s.id");
   const catMap = new Map();
   for (const it of items) { if (!it.category_id) continue; if (!catMap.has(it.category_id)) catMap.set(it.category_id, { id: it.category_id, name: it.category_name || ('#分类' + it.category_id), total: 0, on: 0 }); const c = catMap.get(it.category_id); c.total++; if (it.low_watch === 1) c.on++; }
   ok(res, { threshold: parseInt(getSetting('low_threshold', '10'), 10) || 10, items, categories: [...catMap.values()].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'zh')) });
@@ -2955,11 +3019,11 @@ app.get('/api/brand/:file', (req, res) => {
   fs.createReadStream(p).pipe(res);
 });
 app.get('/api/dashboard', wrap((req, res) => {
-  const skuCount = sget('SELECT COUNT(*) AS c FROM skus WHERE active=1').c;
+  const skuCount = sget("SELECT COUNT(*) AS c FROM skus WHERE active=1 AND kind='sku'").c;
   const stockMapRows = stockMap();
   const low = [];
   const lowThreshold = parseInt(getSetting('low_threshold', '10'), 10) || 10;
-  const skus = sall('SELECT * FROM skus WHERE active=1');
+  const skus = sall("SELECT * FROM skus WHERE active=1 AND kind='sku'");
   for (const s of skus) {
     if (!(s.low_watch === undefined || s.low_watch === null || Number(s.low_watch) === 1)) continue; // 未纳入“低库存关注”的物资不提醒
     const q = s.sn_managed ? snInCount(s.id) : (stockMapRows.get(s.id) || 0);
@@ -3760,10 +3824,10 @@ app.get('/api/remote/flow/status', wrap((req, res) => {
   ok(res, { feature: 'flow', name: '跨库出入库单流转(全电子)', reserved: false, enabled: true, note: '已启用：支持跨库流转（推送 / 确认入账 / 拒绝 / 撤销 / 回执）' });
 }));
 app.get('/api/remote/categories', wrap((req, res) => ok(res, sall('SELECT id,name,code,remark FROM categories ORDER BY sort, name'))));
-app.get('/api/remote/skus', wrap((req, res) => ok(res, sall('SELECT s.id,s.sku_code,s.name,s.spec,s.unit,s.sn_managed,s.location,c.name AS category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.active=1 ORDER BY s.sku_code'))));
+app.get('/api/remote/skus', wrap((req, res) => ok(res, sall("SELECT s.id,s.sku_code,s.name,s.spec,s.unit,s.sn_managed,s.location,c.name AS category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.active=1 AND s.kind='sku' ORDER BY s.sku_code"))));
 app.get('/api/remote/stock', wrap((req, res) => {
   const stock = stockMap();
-  const rows = sall('SELECT s.id,s.sku_code,s.name,s.unit,s.sn_managed FROM skus s WHERE s.active=1 ORDER BY s.sku_code').map(s => {
+  const rows = sall("SELECT s.id,s.sku_code,s.name,s.unit,s.sn_managed FROM skus s WHERE s.active=1 AND s.kind='sku' ORDER BY s.sku_code").map(s => {
     const q = s.sn_managed ? snInCount(s.id) : (stock.get(s.id) || 0);
     return { sku_code: s.sku_code, name: s.name, unit: s.unit, sn_managed: s.sn_managed, qty: q };
   });
@@ -4701,7 +4765,9 @@ const IMP_SPECS = {
     label: '药品', file: '药品导入模板.xlsx',
     fields: [
       { key: 'name', label: '药品名称', required: true, aliases: ['药品名称', '名称'] },
+      { key: 'mcode', label: '物资编码', aliases: ['物资编码', '物资编号'] },
       { key: 'spec', label: '规格', aliases: ['规格', '规格型号', '型号', '包装规格'] },
+      { key: 'batch', label: '产品批号', aliases: ['产品批号', '批号', '生产批号'] },
       { key: 'code', label: '追溯码/编码', aliases: ['追溯码/编码', '追溯码', '药品追溯码', '药品编码', '编码', '条码'] },
       { key: 'source', label: '来源', aliases: ['来源', '药品来源', '供应商', '厂家'] },
       { key: 'prod_date', label: '生产日期', type: 'date', aliases: ['生产日期'] },
@@ -4882,7 +4948,8 @@ app.post('/api/import/:kind/xlsx/confirm', wrap((req, res) => {
       if (kind === 'instruments') {
         iInst.run(name, S('serial_no'), S('spec'), S('location'), (r0.status === 'sealed' ? 'sealed' : 'active'), D('last_date'), D('expire_date'), S('remark'), now());
       } else if (kind === 'medicines') {
-        iMed.run(name, S('spec'), D('prod_date'), D('expire_date'), D('in_date'), S('source'), S('code'), S('remark'), now());
+        const ri = iMed.run(name, S('mcode'), S('spec'), S('batch'), D('prod_date'), D('expire_date'), D('in_date'), S('source'), S('code'), S('remark'), now());
+        medSkuSync(sget('SELECT * FROM medicines WHERE id=?', Number(ri.lastInsertRowid)));
       } else if (kind === 'office') {
         const ri = iOff.run(S('code'), name, S('spec'), S('unit'), parseInt(r0.qty, 10) || 0, catIdOf(r0.category), S('location'), S('remark'), now());
         if (r0.status === 0) db.prepare('UPDATE office_items SET status=0 WHERE id=?').run(Number(ri.lastInsertRowid));
@@ -4941,28 +5008,69 @@ app.post('/api/instruments/:id/seal', wrap((req, res) => {
 }));
 app.delete('/api/instruments/:id', wrap((req, res) => { db.prepare('DELETE FROM instruments WHERE id=?').run(Number(req.params.id)); ok(res, { ok: true }); }));
 
-/* ---- 药品 medicines ---- */
+/* ---- 药品 medicines ----
+ * 药品台账独立于物资档案（不进「物资管理」）：药品自己维护 物资编码 / 规格 / 产品批号 / 追溯码 / 效期等；
+ * 为让它能走出入库单，后台会给每条药品配一条 kind='med' 的“隐藏档案”（skus 行，物资管理 / 库存 / 盘库都不显示），
+ * 出入库单按药品的物资编码搜到它、如实记账，药品管理页再回显结存数量与最近一次出入库。 */
+function medSkuSync(m) {
+  const code = String(m.mcode || '').trim();
+  const name = String(m.name || '').trim();
+  const spec = String(m.spec || '').trim();
+  let sku = m.sku_id ? skuById(m.sku_id) : null;
+  if (!sku) {
+    // 没填物资编码时不留占位编码（显示名 / 搜索按药品名称走）
+    const r = iSku.run(code, name, spec, '', 0, '', null, '', now());
+    const id = Number(r.lastInsertRowid);
+    db.prepare("UPDATE skus SET kind='med' WHERE id=?").run(id);
+    db.prepare('UPDATE medicines SET sku_id=? WHERE id=?').run(id, m.id);
+    return id;
+  }
+  db.prepare("UPDATE skus SET sku_code=?, name=?, spec=?, kind='med', active=1 WHERE id=?").run(code, name, spec, sku.id);
+  return sku.id;
+}
+// 药品的出入库小结：结存数量 + 单据数 + 最近一次流水
+function medFlowInfo(skuId) {
+  if (!skuId) return { stock_qty: 0, io_docs: 0, last_doc: null };
+  const agg = sget('SELECT COALESCE(SUM(qty),0) AS q, COUNT(DISTINCT doc_id) AS d FROM document_lines WHERE sku_id=?', skuId);
+  const last = sget(`SELECT l.qty, d.doc_no, d.type, d.party, d.operator, d.created_at AS doc_at
+    FROM document_lines l JOIN documents d ON d.id=l.doc_id WHERE l.sku_id=? ORDER BY l.id DESC LIMIT 1`, skuId);
+  return { stock_qty: agg.q || 0, io_docs: agg.d || 0, last_doc: last || null };
+}
 app.get('/api/medicines', wrap((req, res) => {
   const q = (req.query.q || '').trim(); const cond = []; const args = [];
-  if (q) { cond.push('(name LIKE ? OR spec LIKE ? OR source LIKE ? OR code LIKE ?)'); const l = `%${q}%`; args.push(l, l, l, l); }
+  if (q) { cond.push('(name LIKE ? OR mcode LIKE ? OR spec LIKE ? OR batch LIKE ? OR source LIKE ? OR code LIKE ?)'); const l = `%${q}%`; args.push(l, l, l, l, l, l); }
   const w = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
-  ok(res, sall(`SELECT * FROM medicines ${w} ORDER BY expire_date, id DESC`, ...args));
+  const rows = sall(`SELECT * FROM medicines ${w} ORDER BY expire_date, id DESC`, ...args);
+  for (const r of rows) Object.assign(r, medFlowInfo(r.sku_id));
+  ok(res, rows);
 }));
 app.post('/api/medicines', wrap((req, res) => {
   const b = req.body || {}; const name = String(b.name || '').trim(); if (!name) throw new Error('药品名称必填');
   const d = k => (isValidDate(b[k]) ? String(b[k]).slice(0, 10) : '');
-  const r = iMed.run(name, String(b.spec || '').trim(), d('prod_date'), d('expire_date'), d('in_date'), String(b.source || '').trim(), String(b.code || '').trim(), String(b.remark || '').trim(), now());
-  ok(res, sget('SELECT * FROM medicines WHERE id=?', Number(r.lastInsertRowid)));
+  const r = iMed.run(name, String(b.mcode || '').trim(), String(b.spec || '').trim(), String(b.batch || '').trim(), d('prod_date'), d('expire_date'), d('in_date'), String(b.source || '').trim(), String(b.code || '').trim(), String(b.remark || '').trim(), now());
+  const med = sget('SELECT * FROM medicines WHERE id=?', Number(r.lastInsertRowid));
+  medSkuSync(med);
+  ok(res, sget('SELECT * FROM medicines WHERE id=?', med.id));
 }));
 app.put('/api/medicines/:id', wrap((req, res) => {
   const id = Number(req.params.id); const c = sget('SELECT * FROM medicines WHERE id=?', id); if (!c) throw new Error('记录不存在');
   const b = req.body || {}; const name = String(b.name ?? c.name).trim(); if (!name) throw new Error('药品名称必填');
   const d = (k, fb) => (isValidDate(b[k]) ? String(b[k]).slice(0, 10) : (fb || ''));
-  db.prepare('UPDATE medicines SET name=?, spec=?, prod_date=?, expire_date=?, in_date=?, source=?, code=?, remark=? WHERE id=?')
-    .run(name, String(b.spec ?? c.spec).trim(), d('prod_date', c.prod_date), d('expire_date', c.expire_date), d('in_date', c.in_date), String(b.source ?? c.source).trim(), String(b.code ?? c.code).trim(), String(b.remark ?? c.remark).trim(), id);
+  db.prepare('UPDATE medicines SET name=?, mcode=?, spec=?, batch=?, prod_date=?, expire_date=?, in_date=?, source=?, code=?, remark=? WHERE id=?')
+    .run(name, String(b.mcode ?? c.mcode).trim(), String(b.spec ?? c.spec).trim(), String(b.batch ?? c.batch).trim(), d('prod_date', c.prod_date), d('expire_date', c.expire_date), d('in_date', c.in_date), String(b.source ?? c.source).trim(), String(b.code ?? c.code).trim(), String(b.remark ?? c.remark).trim(), id);
+  medSkuSync(sget('SELECT * FROM medicines WHERE id=?', id)); // 名称 / 物资编码 / 规格 改了要同步给隐藏档案，出入库单才能搜到最新信息
   ok(res, sget('SELECT * FROM medicines WHERE id=?', id));
 }));
-app.delete('/api/medicines/:id', wrap((req, res) => { db.prepare('DELETE FROM medicines WHERE id=?').run(Number(req.params.id)); ok(res, { ok: true }); }));
+app.delete('/api/medicines/:id', wrap((req, res) => {
+  const id = Number(req.params.id);
+  const c = sget('SELECT * FROM medicines WHERE id=?', id);
+  if (!c) throw new Error('记录不存在');
+  const skuId = c.sku_id;
+  if (skuId && sget('SELECT COUNT(*) AS c FROM document_lines WHERE sku_id=?', skuId).c) throw new Error('该药品已有出入库记录，不能删除（可编辑其效期 / 批号等信息）');
+  if (skuId) { try { db.prepare('DELETE FROM skus WHERE id=?').run(skuId); } catch {} }
+  db.prepare('DELETE FROM medicines WHERE id=?').run(id);
+  ok(res, { ok: true });
+}));
 
 /* ---- 坏件管理 damaged_items（独立台账：登记坏件 / 维修进度，不影响库存与流水）---- */
 const DMG_STATUS = ['pending', 'repairing', 'repaired', 'scrapped'];
@@ -5689,12 +5797,12 @@ app.get('/api/search', asy(async (req, res) => {
   const like = `%${q}%`;
   const push = (key, label, rows) => { if (rows.length) out.groups.push({ key, label, rows }); };
   const m = (r, code, title, sub) => ({ id: r.id, code: String(code ?? ''), title: String(title ?? ''), sub: String(sub ?? '') });
-  push('skus', '物资', sall('SELECT s.id,s.sku_code,s.name,s.spec,s.unit,s.location,c.name category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.sku_code LIKE ? OR s.name LIKE ? OR s.spec LIKE ? ORDER BY s.sku_code LIMIT 15', like, like, like).map(r => m(r, r.sku_code, r.name, [r.category_name, r.location, r.spec, r.unit].filter(Boolean).join(' · '))));
+  push('skus', '物资', sall("SELECT s.id,s.sku_code,s.name,s.spec,s.unit,s.location,c.name category_name FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.kind='sku' AND (s.sku_code LIKE ? OR s.name LIKE ? OR s.spec LIKE ?) ORDER BY s.sku_code LIMIT 15", like, like, like).map(r => m(r, r.sku_code, r.name, [r.category_name, r.location, r.spec, r.unit].filter(Boolean).join(' · '))));
   push('sn', 'SN 序列号', sall("SELECT s.id,s.sn,s.status,sk.name,sk.sku_code,sk.location FROM serial_numbers s JOIN skus sk ON sk.id=s.sku_id WHERE s.sn LIKE ? OR sk.sku_code LIKE ? OR sk.name LIKE ? ORDER BY s.id DESC LIMIT 15", like, like, like).map(r => m(r, r.sn, r.name, [r.sku_code, r.location, (r.status === 'in' ? '在库' : '已出')].filter(Boolean).join(' · '))));
   const DL = { in: '入库', out: '出库', count: '盘库' };
   push('docs', '单据', sall('SELECT * FROM documents WHERE doc_no LIKE ? OR party LIKE ? OR operator LIKE ? ORDER BY id DESC LIMIT 15', like, like, like).map(r => m(r, r.doc_no, DL[r.type] || r.type, [(r.party || ''), (r.operator || ''), dateOf(r.created_at)].filter(Boolean).join(' · '))));
   push('instruments', '计量器具', sall('SELECT * FROM instruments WHERE name LIKE ? OR serial_no LIKE ? OR location LIKE ? ORDER BY expire_date LIMIT 15', like, like, like).map(r => m(r, r.serial_no, r.name, [r.location, r.expire_date ? '到期 ' + r.expire_date : '', r.status === 'sealed' ? '封存' : '在用'].filter(Boolean).join(' · '))));
-  push('medicines', '药品', sall('SELECT * FROM medicines WHERE name LIKE ? OR spec LIKE ? OR source LIKE ? OR code LIKE ? ORDER BY expire_date LIMIT 15', like, like, like, like).map(r => m(r, r.code, r.name, [r.spec, r.source, r.expire_date ? '有效期 ' + r.expire_date : ''].filter(Boolean).join(' · '))));
+  push('medicines', '药品', sall('SELECT * FROM medicines WHERE name LIKE ? OR mcode LIKE ? OR spec LIKE ? OR batch LIKE ? OR source LIKE ? OR code LIKE ? ORDER BY expire_date LIMIT 15', like, like, like, like, like, like).map(r => m(r, r.mcode || r.code, r.name, [r.spec, r.batch ? '批号 ' + r.batch : '', r.source, r.expire_date ? '有效期 ' + r.expire_date : ''].filter(Boolean).join(' · '))));
   push('damages', '坏件', sall('SELECT * FROM damaged_items WHERE name LIKE ? OR spec LIKE ? OR sku_code LIKE ? OR reason LIKE ? OR location LIKE ? ORDER BY id DESC LIMIT 15', like, like, like, like, like).map(r => m(r, r.sku_code, r.name, [r.spec, r.location, '数量 ' + (r.qty || 0), DMG_STATUS_CN[r.status] || r.status, r.reason].filter(Boolean).join(' · '))));
   push('office', '办公物资', sall("SELECT o.id,o.code,o.name,o.spec,o.unit,o.qty,o.location,c.name category_name FROM office_items o LEFT JOIN categories c ON c.id=o.category_id WHERE o.code LIKE ? OR o.name LIKE ? OR o.spec LIKE ? ORDER BY o.code LIMIT 15", like, like, like).map(r => m(r, r.code, r.name, [r.category_name, r.location, r.spec, '数量 ' + (r.qty || 0)].filter(Boolean).join(' · '))));
   push('loans', '物资借用', sall("SELECT l.id,l.borrower,l.sku_code,l.name,l.qty,l.unit,l.loan_date,l.status,sk.location FROM loans l LEFT JOIN skus sk ON sk.id=l.sku_id WHERE l.borrower LIKE ? OR l.sku_code LIKE ? OR l.name LIKE ? ORDER BY l.id DESC LIMIT 15", like, like, like).map(r => m(r, r.name, r.borrower, [r.sku_code + ' ×' + r.qty + (r.unit || ''), r.location, (r.status === 'out' ? '在借' : '已还'), '借 ' + r.loan_date].filter(Boolean).join(' · '))));

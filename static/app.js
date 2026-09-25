@@ -324,11 +324,12 @@ function skuSpecText(spec, n = 25) {
   const s = String(spec == null ? '' : spec).replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
-// 物资条目统一显示文案：物资编码|名称 · 规格（25 字截断） · 存放位置
+// 物资条目统一显示文案：物资编码|名称 · 规格（25 字截断） · 存放位置（药品的隐藏档案末尾额外标出「药品」）
 function skuOptText(x) {
   const parts = [String(x.name == null ? '' : x.name).trim()].filter(Boolean);
   const sp = skuSpecText(x.spec, 25); if (sp) parts.push(sp);
   const loc = String(x.location == null ? '' : x.location).trim(); if (loc) parts.push(loc);
+  if (String(x.kind || '') === 'med') parts.push('药品');
   const rest = parts.join(' · ');
   const code = String(x.sku_code == null ? '' : x.sku_code).trim();
   return code ? (rest ? code + '|' + rest : code) : rest;
@@ -789,7 +790,19 @@ async function lowWatchModal(after) {
 const KIND = {
   material: { label: '物资类别', note: '用作盘库表“物资类别”列与物资归类下拉。', api: '/api/categories' },
   location: { label: '存放位置', note: '用作“存放位置”下拉（物资存放位置、盘点明细等）。', api: '/api/locations' },
+  unit: { label: '常用单位', note: '客户 / 领用部门 / 借用人 等“非本地部门”的输入候选。', api: '/api/common-units' },
 };
+/* 常用单位：维护一份全局 <datalist id="unit-list">，凡绑了 list="unit-list" 的输入框
+ * 都能下拉选、也照样能手写（原生 datalist：有候选提示，但不限制输入内容）。 */
+let unitCache = null;
+async function ensureUnitOptions(force) {
+  if (!force && Array.isArray(unitCache)) return unitCache;
+  try { unitCache = await api('/api/common-units'); } catch { unitCache = unitCache || []; }
+  let dl = document.getElementById('unit-list');
+  if (!dl) { dl = document.createElement('datalist'); dl.id = 'unit-list'; document.body.appendChild(dl); }
+  dl.innerHTML = (unitCache || []).map(u => `<option value="${esc(u)}"></option>`).join('');
+  return unitCache;
+}
 async function renderCategories(v) {
   let mode = 'material';
   const folded = {}; // 存放位置页：仓库行折叠状态（true=已折叠分区）
@@ -802,11 +815,26 @@ async function renderCategories(v) {
     if (mode === 'material') skus.forEach(s => { if (s.category_id) cnt.set(s.category_id, (cnt.get(s.category_id) || 0) + 1); });
     else skus.forEach(s => { if (s.location) cnt.set(s.location, (cnt.get(s.location) || 0) + 1); });
     const note = $('#cat-note'); if (note) note.textContent = k.note;
-    const newBtn = $('#cat-new'); if (newBtn) newBtn.textContent = mode === 'location' ? '＋ 新建仓库' : '＋ 新建';
+    const newBtn = $('#cat-new'); if (newBtn) newBtn.textContent = mode === 'location' ? '＋ 新建仓库' : (mode === 'unit' ? '＋ 添加单位' : '＋ 新建');
     const tplBtn = $('#cat-tpl'); if (tplBtn) tplBtn.style.display = mode === 'location' ? '' : 'none';
     const impBtn = $('#cat-imp'); if (impBtn) impBtn.style.display = mode === 'location' ? '' : 'none';
     const head = $('#cat-head'); const body = $('#cat-body');
     if (!head || !body) return;
+    if (mode === 'unit') {
+      // 常用单位：仅供输入候选，不限制手写；支持上移 / 下移 / 改名 / 删除
+      head.innerHTML = '<tr><th style="width:80px">序号</th><th>单位名称</th><th style="width:230px">操作</th></tr>';
+      body.innerHTML = list.length ? list.map((u, i) => `<tr>
+        <td class="num">${i + 1}</td><td><b>${esc(u)}</b></td>
+        <td style="white-space:nowrap">
+          <button class="btn sm ghost" data-u="up" data-i="${i}" title="上移（决定候选出现顺序）" ${i === 0 ? 'disabled' : ''}>▲</button>
+          <button class="btn sm ghost" data-u="down" data-i="${i}" title="下移" ${i === list.length - 1 ? 'disabled' : ''}>▼</button>
+          <button class="btn sm" data-u="edit" data-i="${i}">编辑</button>
+          <button class="btn sm danger" data-u="del" data-i="${i}">删除</button></td></tr>`).join('')
+        : '<tr><td colspan="3"><div class="empty"><div class="big">🏢</div>还没有常用单位，点右上角「＋ 添加单位」（支持一次粘贴多行）。</div></td></tr>';
+      const n = $('#cat-note');
+      if (n) n.textContent = k.note + ' 它们会作为候选出现在出入库单的客户 / 领用部门、借用单的借用人、单据更正与“借出方”等处——没列出来的照样可以直接手写。';
+      return;
+    }
     if (mode === 'material') {
       head.innerHTML = '<tr><th>代码</th><th>名称</th><th class="num">使用数</th><th class="num">排序</th><th>备注</th><th style="width:216px">操作</th></tr>';
       body.innerHTML = list.length ? list.map((c, i) => `<tr>
@@ -854,6 +882,7 @@ async function renderCategories(v) {
     <div class="seg" id="kind-seg">
       <button data-m="material" class="active">🗂️ 物资类别</button>
       <button data-m="location">📍 存放位置（仓库 / 分区）</button>
+      <button data-m="unit">🏢 常用单位</button>
     </div>
     <span class="tag" id="cat-note" style="font-size:13px"></span>
     <div class="spacer"></div>
@@ -868,8 +897,31 @@ async function renderCategories(v) {
   $$('#kind-seg button', v).forEach(b => b.onclick = () => { mode = b.dataset.m; $$('#kind-seg button', v).forEach(x => x.classList.toggle('active', x === b)); paint(); });
   $('#cat-tpl', v).onclick = () => impDownloadTemplate('locations');
   $('#cat-imp', v).onclick = () => impFlow('locations', paint);
-  $('#cat-new', v).onclick = async () => { const list = mode === 'material' ? [] : await api('/api/locations').catch(() => []); itemModal(mode, null, null, paint); };
+  $('#cat-new', v).onclick = async () => {
+    if (mode === 'unit') { const us = await api('/api/common-units').catch(() => []); unitModal(null, us, paint); return; }
+    const list = mode === 'material' ? [] : await api('/api/locations').catch(() => []);
+    itemModal(mode, null, null, paint);
+  };
   $('#cat-body', v).addEventListener('click', async e => {
+    // 常用单位：上移 / 下移 / 改名 / 删除（全量保存，原子）
+    const ub = e.target.closest('[data-u]');
+    if (ub) {
+      const i = Number(ub.dataset.i); const act = ub.dataset.u;
+      const us = await api('/api/common-units').catch(() => []);
+      if (act === 'edit') { unitModal(us[i], us, paint); return; }
+      const next = us.slice();
+      if (act === 'del') {
+        if (!await confirmBox(`删除常用单位「${us[i]}」？（已经写在单据里的内容不受影响）`, { danger: true, okText: '删除' })) return;
+        next.splice(i, 1);
+      } else if (act === 'up' && i > 0) { const t = next[i - 1]; next[i - 1] = next[i]; next[i] = t; }
+      else if (act === 'down' && i < next.length - 1) { const t = next[i + 1]; next[i + 1] = next[i]; next[i] = t; }
+      try {
+        const out = await safeRun(() => api('/api/common-units', { method: 'PUT', body: JSON.stringify({ units: next }) }));
+        if (out) unitCache = out;
+        await ensureUnitOptions(true); toast('已保存'); paint();
+      } catch {}
+      return;
+    }
     const fold = e.target.closest('[data-fold]');
     if (fold) {
       const id = Number(fold.dataset.fold);
@@ -979,6 +1031,38 @@ function catModal(id, mode, after) {
   };
   if (!id) return open(null);
   api(k.api).then(list => open(list.find(x => x.id === id) || null));
+}
+/* 常用单位：新增（支持一次粘贴多行）/ 改名（均为全量保存，原子） */
+function unitModal(item, list, after) {
+  const isEdit = item != null;
+  const { el, close } = modal({ title: isEdit ? '修改常用单位' : '添加常用单位', small: true,
+    body: isEdit
+      ? `<label class="field"><span class="lab">单位名称</span><input class="input" id="un-one" value="${esc(item)}"></label>`
+      : `<label class="field"><span class="lab">单位名称（一行一个，可一次粘贴多个）</span><textarea class="input" id="un-many" rows="6" style="min-height:130px" placeholder="如：\nXX科技有限公司\nXX医院设备科\n信息中心"></textarea></label>
+         <div class="hint">已存在的会自动跳过。保存后会作为候选出现在出入库单的客户 / 领用部门、借用单的借用人、单据更正等处——<b>没列出来的照样可以直接手写</b>。</div>`,
+    foot: '<button class="btn" data-c>取消</button><button class="btn primary" id="un-save">保存</button>' });
+  $$('[data-c]', el).forEach(x => x.onclick = close);
+  const inp = $('#un-one', el) || $('#un-many', el);
+  setTimeout(() => { try { inp.focus(); } catch {} }, 60);
+  $('#un-save', el).onclick = async () => {
+    let next;
+    if (isEdit) {
+      const v = $('#un-one', el).value.trim();
+      if (!v) return toast('单位名称不能为空', 'err');
+      next = list.map(x => (x === item ? v : x));
+    } else {
+      const add = $('#un-many', el).value.split(/[\n\r,，;；]+/).map(s => s.trim()).filter(Boolean);
+      if (!add.length) return toast('请先填写单位名称', 'err');
+      next = [...list, ...add];
+    }
+    try {
+      const out = await safeRun(() => api('/api/common-units', { method: 'PUT', body: JSON.stringify({ units: next }) }));
+      if (out) unitCache = out;
+      await ensureUnitOptions(true);
+      toast(isEdit ? '已修改' : '已添加');
+      close(); after && after();
+    } catch {}
+  };
 }
 
 /* ============================================================
@@ -1650,7 +1734,10 @@ async function startFlowOutDoc() {
 }
 async function renderIo(v, param) {
   if (!state.skus.length) await getSkus();
-  const skus = state.skus;
+  // 出入库单额外支持药品：药品台账的「隐藏档案」（含结存）单独取一份并进选择器；
+  // 物资管理 / 库存 & 清单 / 盘库都不含药品（详见 /api/skus、/api/stock 的 kind 过滤）
+  const medSkus = await api('/api/stock?only_med=1').catch(() => []);
+  const skus = medSkus.length ? [...state.skus, ...medSkus] : state.skus;
   const locs = await api('/api/locations').catch(() => []);   // 存放位置下拉提示（明细行内可直接选 / 也可手输）
   const peers = await api('/api/peers').catch(() => []);      // 互联仓库（出库单「跨库流转」时用作领用部门）
   const peersOn = (peers || []).filter(p => p.enabled);
@@ -1690,7 +1777,7 @@ async function renderIo(v, param) {
       <label style="width:160px"><span class="lab">单据日期</span><input class="input" id="io-date" type="date" value="${esc(io.date || today())}" title="事后补单：改成实际发生日期，单据日期与编号里的日期段都会跟随它"></label>
       <label style="min-width:220px" class="grow"><span class="lab">${io.type === 'in' ? '供应商' : (io.flow ? '客户 / 领用部门（互联仓库）' : '客户 / 领用部门')}</span>${io.type === 'out' && io.flow
         ? `<select class="input" id="io-party-sel"><option value="">— 选择互联仓库 —</option>${peersOn.map(p => `<option value="${p.id}" ${String(io.peerId) === String(p.id) ? 'selected' : ''}>${esc(p.name)}（${esc(p.host)}:${p.port}）</option>`).join('')}</select>`
-        : `<input class="input" id="io-party" value="${esc(io.party || (io.type === 'in' ? state.settings.default_party || '' : ''))}" placeholder="${io.type === 'in' ? '供应商' : '客户'}">`}</label>
+        : `<input class="input" id="io-party" list="unit-list" value="${esc(io.party || (io.type === 'in' ? state.settings.default_party || '' : ''))}" placeholder="${io.type === 'in' ? '供应商' : '客户'}（可下拉选常用单位，也可手写）">`}</label>
       ${io.type === 'out' ? `<label class="check" style="align-self:flex-end;padding-bottom:9px;white-space:nowrap" title="勾选后：领用部门从已添加的互联仓库中选择；保存单据时自动把这张出库单推送给对方（对方确认后按其入库单入账）"><input type="checkbox" id="io-flow" ${io.flow ? 'checked' : ''}> 🔄 跨库流转</label>` : ''}
       <label style="width:150px"><span class="lab">经办人</span><input class="input" id="io-op" value="${esc(io.operator)}"></label>
       <label class="grow" style="min-width:220px"><span class="lab">备注</span><input class="input" id="io-rmk" value="${esc(io.remark)}"></label>
@@ -1723,7 +1810,7 @@ async function renderIo(v, param) {
   $('#io-rmk', v).oninput = e => io.remark = e.target.value;
   $('#io-addline', v).onclick = () => { io.lines.push({ sku_id: '', qty: '', snText: '', sel: [], skuQ: '', location: '' }); ioPaintLines(v, data); };
   $('#io-import-qr', v).onclick = qrImportFlow;
-  $('#io-import-xlsx', v).onclick = xlsxImportFlow;
+  $('#io-import-xlsx', v).onclick = () => withBusy($('#io-import-xlsx', v), '⬆ 正在打开…', xlsxImportFlow);
   $('#io-clear', v).onclick = () => { io.lines = []; ioPaintLines(v, data); };
   $('#io-draft', v).onclick = saveIoDraft;
   $('#io-drafts', v).onclick = () => draftsModal('io');
@@ -1967,7 +2054,7 @@ async function docFixModal(id, after) {
   const partyLabel = doc.type === 'in' ? '供应商' : (doc.type === 'count' ? '往来单位' : '客户 / 领用部门');
   const { el, close } = modal({ title: `更正单据信息 · ${doc.doc_no}`, small: true,
     body: `<div class="hint" style="margin-bottom:8px">${esc(t.t || '')}单 <b class="mono">${esc(doc.doc_no)}</b> · 单据日期 <b>${esc(String(doc.created_at || '').slice(0, 10))}</b></div>
-      <label class="field"><span class="lab">${partyLabel}</span><input class="input" id="df-party" value="${esc(doc.party || '')}"></label>
+      <label class="field"><span class="lab">${partyLabel}</span><input class="input" id="df-party" list="unit-list" value="${esc(doc.party || '')}"></label>
       <label class="field"><span class="lab">经办人</span><input class="input" id="df-op" value="${esc(doc.operator || '')}"></label>
       <label class="field"><span class="lab">备注</span><input class="input" id="df-rmk" value="${esc(doc.remark || '')}"></label>
       <div class="hint">本功能只更正<b>信息</b>：<b>单据日期不可修改</b>，明细数量 / SN 也不在此处调整。<br>若日期或数量写错了，请先「撤回」该单据，再按正确信息重新录入。</div>`,
@@ -1996,10 +2083,55 @@ function updateDlBtns(U) {
 /* ============================================================
  * 导入：扫码(图片) 出入库单 / xlsx 批量入库 / 二维码弹窗
  * ============================================================ */
-function pickImage() { return new Promise(res => { const p = document.createElement('input'); p.type = 'file'; p.accept = 'image/*'; p.capture = 'environment'; p.onchange = () => res(p.files[0] || null); p.click(); }); }
-function pickXlsx() { return new Promise(res => { const p = document.createElement('input'); p.type = 'file'; p.accept = '.xlsx'; p.onchange = () => res(p.files[0] || null); p.click(); }); }
-function pickJson() { return new Promise(res => { const p = document.createElement('input'); p.type = 'file'; p.accept = '.json,application/json,text/plain'; p.onchange = () => res(p.files[0] || null); p.click(); }); }
+// 通用文件选择：把 input **挂到页面上**再点（游离节点在部分浏览器里响应慢甚至不弹框），选完 / 取消后立刻移除，
+// 并监听 cancel 事件，避免用户取消后 Promise 悬着。
+function pickFile({ accept, capture } = {}) {
+  return new Promise(res => {
+    const p = document.createElement('input');
+    p.type = 'file';
+    if (accept) p.accept = accept;
+    if (capture) p.setAttribute('capture', capture);
+    p.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+    let done = false;
+    const fin = f => { if (done) return; done = true; try { p.remove(); } catch {} res(f || null); };
+    p.onchange = () => fin(p.files && p.files[0]);
+    p.oncancel = () => fin(null);
+    document.body.appendChild(p);
+    p.click();
+  });
+}
+function pickImage() { return pickFile({ accept: 'image/*', capture: 'environment' }); }
+function pickXlsx() { return pickFile({ accept: '.xlsx' }); }
+function pickJson() { return pickFile({ accept: '.json,application/json,text/plain' }); }
 function uploadFile(url, file) { const fd = new FormData(); fd.append('file', file); return api(url, { method: 'POST', body: fd }); }
+// 系统「选择文件 / 拍照」框由浏览器与操作系统弹出，偶尔会很慢：点下去的瞬间先给即时反馈，别让用户以为没点上
+async function withBusy(btn, label, fn) {
+  if (!btn) return fn();
+  const oldText = btn.textContent, oldW = btn.style.minWidth, wasDisabled = btn.disabled;
+  try { btn.style.minWidth = (btn.offsetWidth || 0) + 'px'; } catch {}
+  btn.disabled = true; btn.textContent = label;
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));   // 让上面的文案先渲染出来
+  try { return await fn(); }
+  finally { btn.disabled = wasDisabled; btn.textContent = oldText; btn.style.minWidth = oldW; }
+}
+// 手机拍的照片动辄好几 MB、上千万像素，服务端 jsQR 解码会明显变慢：先等比缩到长边 ≤1600 再上传，
+// 二维码的模块尺寸仍然远大于识别下限，识别率不受影响，上传与解码都快得多。
+async function shrinkImage(file, maxSide = 1600, quality = 0.92) {
+  try {
+    if (!file || !/^image\//.test(String(file.type || ''))) return file;
+    if (typeof createImageBitmap !== 'function') return file;
+    const bmp = await createImageBitmap(file);
+    const long = Math.max(bmp.width || 0, bmp.height || 0);
+    if (!long || long <= maxSide) { try { bmp.close && bmp.close(); } catch {} return file; }
+    const k = maxSide / long;
+    const w = Math.max(1, Math.round((bmp.width || 1) * k)), h = Math.max(1, Math.round((bmp.height || 1) * k));
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    try { bmp.close && bmp.close(); } catch {}
+    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', quality));
+    return blob ? new File([blob], 'qr-photo.jpg', { type: 'image/jpeg' }) : file;
+  } catch { return file; }   // 任何异常都退回原图，功能不受影响
+}
 function qrImportFlow() {
   const { el, close } = modal({ title: '导入出入库单（扫码 / 文件）', small: true,
     body: `<div class="lines">
@@ -2014,17 +2146,17 @@ function qrImportFlow() {
     foot: '<button class="btn" data-c>关闭</button>' });
   $$('[data-c]', el).forEach(x => x.onclick = close);
   const area = $('#qr-src-area', el);
-  $('#qr-src-cam', el).onclick = async () => {
+  $('#qr-src-cam', el).onclick = () => withBusy($('#qr-src-cam', el), '📷 正在打开…', async () => {
     const f = await pickImage(); if (!f) return;
     try {
       const hide = loadingBox('识别二维码…');
-      let r; try { r = await uploadFile('/api/import/qr-image', f); } finally { hide(); }
+      let r; try { r = await uploadFile('/api/import/qr-image', await shrinkImage(f)); } finally { hide(); }
       if (!r.payload) throw new Error('未识别到单据二维码');
       qrReview(r);
     } catch (e) { toast(e.message, 'err'); }
-  };
+  });
   // 文件导入：对方扫码不出来的大单据，改用对方导出的 .json（内容与二维码一致）
-  $('#qr-src-file', el).onclick = async () => {
+  $('#qr-src-file', el).onclick = () => withBusy($('#qr-src-file', el), '📄 正在打开…', async () => {
     const f = await pickJson(); if (!f) return;
     try {
       const text = (await f.text()).trim();
@@ -2034,7 +2166,7 @@ function qrImportFlow() {
       if (!r.payload) throw new Error('文件不是本系统导出的出入库单文件');
       qrReview(r);
     } catch (e) { toast(e.message, 'err'); }
-  };
+  });
   $('#qr-src-text', el).onclick = () => {
     area.innerHTML = `<label class="field"><span class="lab">扫码枪 / 二维码内容文本</span><textarea class="input mono" id="qt-txt" rows="6" style="min-height:120px" placeholder="粘贴扫码枪输出或二维码内容，可整段粘贴"></textarea></label>
       <button class="btn primary" id="qt-go">识别并预览</button>
@@ -2420,14 +2552,14 @@ async function countExportDialog(ids) {
     </div>
     <div class="hint" style="margin-bottom:8px">修正仅改<b>本次导出的表</b>；如需把输入当作最新数据<b>改库存并存档</b>，请点右下“提交（更新库存）”。SN 物资数量请勿改动（须走 SN 核对盘点）。</div>
     <div class="tbl-wrap" style="max-height:44vh;overflow:auto">
-    <table class="tbl"><thead><tr><th>物资类别</th><th>物资编码</th><th>物资名称</th><th>物资型号</th><th>单位</th><th class="num">上次盘点数量</th><th class="num">本次数量变化</th><th class="num">本次计算数量</th><th class="num">实物盘点数量</th><th>备注</th></tr></thead>
+    <table class="tbl"><thead><tr><th>物资编码</th><th>物资类别</th><th>物资名称</th><th>物资型号</th><th>单位</th><th class="num">上次盘点数量</th><th class="num">本次数量变化</th><th class="num">本次计算数量</th><th class="num">实物盘点数量</th><th>备注</th></tr></thead>
     <tbody id="cx-body"></tbody></table></div>`,
     foot: `<button class="btn" data-c>关闭</button><button class="btn ok" id="cx-commit">✓ 提交：按以上数据更新库存</button><button class="btn primary" id="cx-go">导出盘库表(xlsx)</button>` });
   const tbody = $('#cx-body', el);
   let list = [];
   const paint = () => {
     tbody.innerHTML = list.length ? list.map((r, i) => `<tr data-i="${i}">
-      <td>${esc(r.category || '')}</td><td class="mono">${esc(r.sku_code)}</td><td>${esc(r.name)}</td>
+      <td class="mono">${esc(r.sku_code)}</td><td>${esc(r.category || '')}</td><td>${esc(r.name)}</td>
       <td class="muted">${esc(r.spec || '')}</td><td>${esc(r.unit || '')}</td>
       <td><input class="input num" type="number" data-k="last" value="${r.last}" style="width:76px"></td>
       <td><input class="input num" type="number" data-k="change" value="${r.change}" style="width:76px"></td>
@@ -2519,7 +2651,7 @@ async function renderCount(v, param) {
   <div class="card"><div class="card-head"><h3>盘点明细（可手工录入/修正）</h3><span class="tag" id="ct-tot"></span></div>
   <div class="tbl-wrap" style="overflow:auto">
   <table class="tbl" style="min-width:1180px"><thead><tr>
-    <th style="width:30px">#</th><th style="width:120px">物资类别</th><th style="width:120px">物资编码</th><th style="width:150px">物资名称</th><th style="width:130px">物资型号</th><th style="width:120px">存放位置</th><th style="width:70px">单位</th>
+    <th style="width:30px">#</th><th style="width:120px">物资编码</th><th style="width:120px">物资类别</th><th style="width:150px">物资名称</th><th style="width:130px">物资型号</th><th style="width:120px">存放位置</th><th style="width:70px">单位</th>
     <th style="width:90px" class="num">上次盘点数量</th><th style="width:90px" class="num">本次数量变化</th><th style="width:90px" class="num">本次计算数量</th><th style="width:90px" class="num">实物盘点数量</th><th style="width:140px">备注</th><th style="width:40px"></th>
   </tr></thead><tbody id="ct-body"></tbody></table></div></div>`;
   const tbody = $('#ct-body', v);
@@ -2550,8 +2682,8 @@ async function renderCount(v, param) {
     const show = [...sysRows.map(r => ({ kind: 's', r })), ...free.map(r => ({ kind: 'f', r }))];
     tbody.innerHTML = show.map(({ kind, r }, i) => `<tr data-k="${kind}" data-uid="${esc(r.uid)}">
       <td class="muted">${i + 1}</td>
-      <td>${catSel(r.category)}</td>
       <td><input class="input mono" data-c="code" value="${esc(r.code)}"></td>
+      <td>${catSel(r.category)}</td>
       <td><input class="input" data-c="name" value="${esc(r.name)}"></td>
       <td><input class="input" data-c="model" value="${esc(r.model)}" placeholder="型号"></td>
       <td>${locSel(r.loc)}</td>
@@ -3045,7 +3177,7 @@ const ABOUT_CFG = {
     started: '2026-09',
     // 累计编写量：按本仓库开发会话记录文本估算（精确计费值取决于所用模型 / 账单，此处按本地记录估算）
     tokensEstimate: '1,181,464,440 tokens',
-    milestone: 'V0.0.0 → V0.10.13',
+    milestone: 'V0.0.0 → V0.10.14',
   },
 };
 // 【赞赏码】各版本自有的默认赞赏码**不放这里**，而是放在「程序目录 / edition.default.json」
@@ -3832,13 +3964,13 @@ async function queryPeerModal(id, p) {
   $$('[data-q]').forEach(b => b.onclick = async () => {
     try { out.innerHTML = '查询中…'; const r = await api(`/api/peers/${id}/query`, { method: 'POST', body: JSON.stringify({ table: b.dataset.q }) }); out.innerHTML = `<div class="tag" style="margin-bottom:6px">共 ${r.count != null ? r.count : r.rows.length} 条（最多显示 500）</div><table class="tbl"><thead>${headerOf(b.dataset.q)}</thead><tbody>${rowsOf(b.dataset.q, r.rows)}</tbody></table>`; } catch (e) { out.innerHTML = `<span class="badge red">${esc(e.message)}</span>`; }
   });
-  function headerOf(t) { if (t === 'skus') return '<tr><th>物资编码</th><th>物资名称</th><th>物资型号</th><th>单位</th><th>物资类别</th><th>SN</th></tr>'; if (t === 'categories') return '<tr><th>名称</th><th>代码</th></tr>'; if (t === 'stock') return '<tr><th>物资编码</th><th>物资名称</th><th class="num">数量</th><th>SN</th></tr>'; if (t === 'sn') return '<tr><th>SN</th><th>物资编码</th><th>状态</th></tr>'; return '<tr><th>单号</th><th>类型</th><th>往来</th><th>时间</th></tr>'; }
+  function headerOf(t) { if (t === 'skus') return '<tr><th>物资编码</th><th>物资名称</th><th>物资型号</th><th>单位</th><th>物资类别</th><th>SN</th></tr>'; if (t === 'categories') return '<tr><th>名称</th><th>代码</th></tr>'; if (t === 'stock') return '<tr><th>物资编码</th><th>物资名称</th><th class="num">数量</th><th>SN</th></tr>'; if (t === 'sn') return '<tr><th>物资编码</th><th>SN</th><th>状态</th></tr>'; return '<tr><th>单号</th><th>类型</th><th>往来</th><th>时间</th></tr>'; }
   function rowsOf(t, rows) {
     const map = {
       skus: r => `<td class="mono">${esc(r.sku_code)}</td><td>${esc(r.name)}</td><td class="muted">${esc(r.spec || '')}</td><td>${esc(r.unit || '')}</td><td>${esc(r.category_name || '')}</td><td>${r.sn_managed ? '<span class="badge cyan">SN</span>' : '—'}</td>`,
       categories: r => `<td>${esc(r.name)}</td><td class="mono">${esc(r.code || '')}</td>`,
       stock: r => `<td class="mono">${esc(r.sku_code)}</td><td>${esc(r.name)}</td><td class="num">${r.qty}</td><td>${r.sn_managed ? '<span class="badge cyan">SN</span>' : '—'}</td>`,
-      sn: r => `<td class="mono">${esc(r.sn)}</td><td class="mono">${esc(r.sku_code)}</td><td>${r.status === 'in' ? '<span class="badge green">在库</span>' : '<span class="badge gray">已出</span>'}</td>`,
+      sn: r => `<td class="mono">${esc(r.sku_code)}</td><td class="mono">${esc(r.sn)}</td><td>${r.status === 'in' ? '<span class="badge green">在库</span>' : '<span class="badge gray">已出</span>'}</td>`,
       docs: r => `<td class="mono">${esc(r.doc_no)}</td><td>${TYPE_META[r.type] ? TYPE_META[r.type].t : r.type}</td><td>${esc(r.party || '')}</td><td class="muted">${fmtDT(r.created_at)}</td>`
     };
     return rows.map(r => '<tr>' + map[t](r) + '</tr>').join('') || '<tr><td colspan="5"><div class="empty">空</div></td></tr>';
@@ -4570,6 +4702,7 @@ async function boot() {
   };
   if (_sc) { _sc.onclick = () => _applyCollapsed(!document.body.classList.contains('side-collapsed')); try { _applyCollapsed(localStorage.getItem('thm_side_collapsed') === '1'); } catch {} }
   buildNav();
+  ensureUnitOptions();   // 常用单位候选（客户 / 领用部门 / 借用人 等输入框共用；失败不影响主流程）
   const lo = $('#btn-logout'), uc = $('#user-chip'), ucn = $('#uc-name');
   const showLogout = on => {
     if (uc) { uc.classList.toggle('nav-hidden', !on); if (!on) uc.classList.remove('open'); }
@@ -4874,24 +5007,34 @@ function renewModal(item, after) {
 async function renderMedicines(v) {
   const rows = await api('/api/medicines').catch(() => []);
   const fil = { q: '' };
+  const DOC_CN = { in: '入库', out: '出库', count: '盘库' };
+  // 库存列：该药已出入库的结存数量（鼠标悬停看最近一次出入库）；从未出入库显示 —
+  const stockCell = r => {
+    if (!r.io_docs) return '<span class="muted">—</span>';
+    const l = r.last_doc || {};
+    const tip = `最近一次：${DOC_CN[l.type] || l.type || ''} ${String(l.doc_at || '').slice(0, 16)} · ${l.doc_no || ''}${l.party ? ' · ' + l.party : ''}${l.operator ? ' · ' + l.operator : ''}`;
+    return `<b title="${esc(tip)}">${Number(r.stock_qty || 0)}</b> <span class="muted" style="font-size:11px" title="${esc(tip)}">（${r.io_docs} 单）</span>`;
+  };
   const paint = () => {
     const fq = fil.q.trim().toLowerCase();
-    const list = rows.filter(r => !fq || [r.name, r.spec, r.source, r.code].some(x => String(x || '').toLowerCase().includes(fq)));
+    const list = rows.filter(r => !fq || [r.name, r.mcode, r.spec, r.batch, r.source, r.code].some(x => String(x || '').toLowerCase().includes(fq)));
     $('#med-body', v).innerHTML = list.length ? list.map(r => `<tr>
-      <td><b>${esc(r.name)}</b></td><td class="muted">${esc(r.spec || '—')}</td><td>${esc(r.prod_date || '—')}</td><td>${expCell(r.expire_date)}</td>
+      <td class="mono">${esc(r.mcode || '—')}</td><td><b>${esc(r.name)}</b></td><td class="muted">${esc(r.spec || '—')}</td><td class="mono">${esc(r.batch || '—')}</td>
+      <td>${esc(r.prod_date || '—')}</td><td>${expCell(r.expire_date)}</td>
       <td>${esc(r.in_date || '—')}</td><td>${esc(r.source || '—')}</td><td class="mono">${esc(r.code || '—')}</td>
+      <td class="num">${stockCell(r)}</td>
       <td class="muted">${esc(r.remark || '')}</td>
       <td style="white-space:nowrap"><button class="btn sm" data-act="edit" data-id="${r.id}">编辑</button><button class="btn sm danger" data-act="del" data-id="${r.id}">删除</button></td></tr>`).join('')
-      : '<tr><td colspan="9"><div class="empty"><div class="big">💊</div>暂无药品，点击右上角「＋ 新增药品」登记。</div></td></tr>';
+      : '<tr><td colspan="12"><div class="empty"><div class="big">💊</div>暂无药品，点击右上角「＋ 新增药品」登记。</div></td></tr>';
   };
   v.innerHTML = `<div class="toolbar">
-    <input class="input" id="med-q" placeholder="搜索 药品名称 / 规格 / 来源 / 追溯码" style="min-width:230px">
+    <input class="input" id="med-q" placeholder="搜索 药品名称 / 物资编码 / 规格 / 产品批号 / 来源 / 追溯码" style="min-width:300px">
     <div class="spacer"></div>
     <button class="btn" id="med-tpl">⬇ 导入模板</button>
     <button class="btn" id="med-imp">⬆ 按模板导入</button>
     <button class="btn primary" id="med-new">＋ 新增药品</button></div>
-    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>药品名称</th><th>规格</th><th>生产日期</th><th>有效期</th><th>入库日期</th><th>药品来源</th><th>药品追溯码</th><th>备注</th><th style="width:150px">操作</th></tr></thead><tbody id="med-body"></tbody></table></div></div>
-    <div class="hint">到期前 90 天内首页会提示。支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记（规格列可填写包装/剂量规格，便于区分同名药品）。</div>`;
+    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>物资编码</th><th>药品名称</th><th>规格</th><th>产品批号</th><th>生产日期</th><th>有效期</th><th>入库日期</th><th>药品来源</th><th>药品追溯码</th><th class="num">库存</th><th>备注</th><th style="width:150px">操作</th></tr></thead><tbody id="med-body"></tbody></table></div></div>
+    <div class="hint">到期前 90 天内首页会提示；支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记。药品<b>不进入「物资管理」「库存 & 清单」「盘库」</b>：需要出入库时到「出入库」页按<b>物资编码 / 药品名称</b>搜到它（候选中标着「药品」），单据照样生成与打印；出入库后这里的<b>库存</b>列会显示结存与单数，效期 / 批号等信息可随时用「编辑」手改。</div>`;
   paint();
   $('#med-q', v).oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#med-q', v).value; paint(); }, 200); }; })();
   $('#med-new', v).onclick = () => medicineModal(null, () => renderMedicines(v));
@@ -4908,6 +5051,8 @@ function medicineModal(item, after) {
   const { el, close } = modal({ title: item ? '编辑药品' : '新增药品', small: true,
     body: `<label class="field"><span class="lab">药品名称 *</span><input class="input" id="md-name" value="${esc(item ? item.name : '')}"></label>
       <label class="field"><span class="lab">规格</span><input class="input" id="md-spec" value="${esc(item ? item.spec : '')}" placeholder="如 0.25g×24粒/盒"></label>
+      <div class="split"><label class="field"><span class="lab">物资编码</span><input class="input mono" id="md-mcode" value="${esc(item ? item.mcode : '')}" placeholder="药品自己的物资编码（不进物资管理）"></label>
+      <label class="field"><span class="lab">产品批号</span><input class="input mono" id="md-batch" value="${esc(item ? item.batch : '')}" placeholder="如 240315A"></label></div>
       <div class="split"><label class="field"><span class="lab">生产日期</span><input class="input" type="date" id="md-prod" value="${esc(item ? item.prod_date : '')}"></label>
       <label class="field"><span class="lab">有效期 *</span><input class="input" type="date" id="md-exp" value="${esc(item ? item.expire_date : '')}"></label></div>
       <div class="split"><label class="field"><span class="lab">入库日期</span><input class="input" type="date" id="md-in" value="${esc(item ? item.in_date : TODAY())}"></label>
@@ -4917,7 +5062,7 @@ function medicineModal(item, after) {
     foot: `<button class="btn" data-c>取消</button><button class="btn primary" id="md-save">保存</button>` });
   $$('[data-c]', el).forEach(x => x.onclick = close);
   $('#md-save', el).onclick = async () => {
-    const body = { name: $('#md-name', el).value.trim(), spec: $('#md-spec', el).value.trim(), prod_date: $('#md-prod', el).value, expire_date: $('#md-exp', el).value, in_date: $('#md-in', el).value, source: $('#md-src', el).value.trim(), code: $('#md-code', el).value.trim(), remark: $('#md-rmk', el).value.trim() };
+    const body = { name: $('#md-name', el).value.trim(), mcode: $('#md-mcode', el).value.trim(), spec: $('#md-spec', el).value.trim(), batch: $('#md-batch', el).value.trim(), prod_date: $('#md-prod', el).value, expire_date: $('#md-exp', el).value, in_date: $('#md-in', el).value, source: $('#md-src', el).value.trim(), code: $('#md-code', el).value.trim(), remark: $('#md-rmk', el).value.trim() };
     if (!body.name) return toast('药品名称必填', 'err');
     try { await safeRun(() => api(item ? `/api/medicines/${item.id}` : '/api/medicines', { method: item ? 'PUT' : 'POST', body: JSON.stringify(body) })); toast('已保存'); close(); after && after(); } catch {}
   };
@@ -4940,7 +5085,7 @@ async function renderDamages(v) {
       && (!fil.status || r.status === fil.status));
     $('#dmg-fcnt', v).textContent = `共 ${list.length} / ${rows.length} 条`;
     $('#dmg-body', v).innerHTML = list.length ? list.map(r => `<tr>
-      <td><b>${esc(r.name)}</b>${r.sku_code ? `<div class="muted" style="font-size:12px">${esc(r.sku_code)}</div>` : ''}</td>
+      <td class="mono">${esc(r.sku_code || '—')}</td><td><b>${esc(r.name)}</b></td>
       <td class="muted">${esc(r.spec || '—')}</td>
       <td>${esc(r.location || '—')}</td>
       <td class="num">${r.qty || 0}${r.unit ? ' ' + esc(r.unit) : ''}</td>
@@ -4962,7 +5107,7 @@ async function renderDamages(v) {
     <span class="tag muted" id="dmg-fcnt"></span>
     <div class="spacer"></div>
     <button class="btn primary" id="dmg-new">＋ 登记坏件</button></div>
-    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>物资名称</th><th>规格</th><th>存放位置</th><th class="num">数量</th><th>序列号 / SN</th><th>坏件原因</th><th>状态</th><th>登记日期</th><th>经办人</th><th>备注</th><th style="width:200px">操作</th></tr></thead><tbody id="dmg-body"></tbody></table></div></div>
+    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>物资编码</th><th>物资名称</th><th>规格</th><th>存放位置</th><th class="num">数量</th><th>序列号 / SN</th><th>坏件原因</th><th>状态</th><th>登记日期</th><th>经办人</th><th>备注</th><th style="width:200px">操作</th></tr></thead><tbody id="dmg-body"></tbody></table></div></div>
     <div class="hint">坏件台账<b>条目取自「物资管理」档案</b>（名称 / 规格 / 单位 / 库位自动带出）；本页只登记坏件与处理进度，<b>不影响库存与出入库流水</b>。处置（报废出库 / 修复入库）请到「出入库」页正常开单，或用「盘库」核对实物。</div>`;
   paint();
   $('#dmg-q', v).oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#dmg-q', v).value; paint(); }, 200); }; })();
@@ -5124,7 +5269,7 @@ async function renderLoans(v) {
       return `<tr class="${r.status === 'out' ? (r.alarm === 'over' ? 'al-over' : r.alarm === 'soon3' ? 'al-soon3' : r.alarm === 'soon7' ? 'al-soon7' : '') : ''}">
       <td>${loanKindBadge(r.kind)}</td>
       <td>${esc(r.borrower || '—')}${r.contact ? `<div class="muted" style="font-size:12px">${esc(r.contact)}</div>` : ''}</td>
-      <td><b>${esc(r.name)}</b> <span class="mono muted">${esc(r.sku_code)}</span>${r.spec ? `<div class="muted" style="font-size:12px">${esc(r.spec)}</div>` : ''}</td>
+      <td>${r.sku_code ? `<span class="mono">${esc(r.sku_code)}</span>|` : ''}<b>${esc(r.name)}</b>${r.spec ? `<div class="muted" style="font-size:12px">${esc(r.spec)}</div>` : ''}</td>
       <td class="num">${r.qty} ${esc(r.unit || '')}${r.sn ? `<div class="muted" style="font-size:11px" title="${esc(r.sn)}">${r.sn.split(/[\s,;，；]+/).length}个SN</div>` : ''}</td>
       <td class="num">${esc(r.loan_date || '—')}</td><td>${esc(r.eff_due || r.due_date || '—')}${(r.due_date && r.eff_due && r.eff_due !== r.due_date) ? '<span class="badge gray">推算</span>' : ''}</td>
       <td class="num">${r.status === 'out'
@@ -5216,7 +5361,7 @@ async function loanBorrowModal(after) {
           <button class="active" data-k="lend">借出（本库→他方）</button>
           <button data-k="borrow">借入（他方→本库）</button>
         </div>
-        <label style="width:170px"><span class="lab" id="lb-party-lab">借用人 *</span><input class="input" id="lb-borrower"></label>
+        <label style="width:170px"><span class="lab" id="lb-party-lab">借用人 *</span><input class="input" id="lb-borrower" list="unit-list"></label>
         <label style="width:170px"><span class="lab">联系方式（可选）</span><input class="input" id="lb-contact"></label>
         <label style="width:165px"><span class="lab">借出/借入日期</span><input class="input" type="date" id="lb-loandate" value="${TODAY()}"></label>
         <label style="width:165px"><span class="lab">应还日期（可选）</span><input class="input" type="date" id="lb-duedate"></label>
@@ -5313,7 +5458,7 @@ function loanEditModal(loan, after) {
   const { el, close } = modal({ title: (isBorrow ? '借入' : '借出') + ' · 修改信息', small: true,
     body: `<div class="hint" style="margin-bottom:6px">${esc(loan.name)} × ${loan.qty} ${esc(loan.unit || '')}（${isBorrow ? '借入' : '借出'}于 ${esc(loan.loan_date)}）${docNo ? ` · 关联${docLabel} <b>${esc(docNo)}</b>` : ''}。</div>
       <div class="split">
-        <label class="field"><span class="lab">${isBorrow ? '借出方（对方仓库/单位）' : '借用人'}</span><input class="input" id="le-borrower" value="${esc(loan.borrower || '')}"></label>
+        <label class="field"><span class="lab">${isBorrow ? '借出方（对方仓库/单位）' : '借用人'}</span><input class="input" id="le-borrower" list="unit-list" value="${esc(loan.borrower || '')}"></label>
         <label class="field"><span class="lab">借用日期</span><input class="input" type="date" id="le-date" value="${esc(String(loan.loan_date || '').slice(0, 10))}"></label>
       </div>
       <div class="split">
@@ -5437,11 +5582,25 @@ function globalSearchInit() {
  * ============================================================ */
 const CHANGELOG = [
   {
+    ver: '0.10.14', title: '药品支持物资编码 / 产品批号，出入库单可直接用药品', date: '2026-09',
+    items: [
+      '「药品管理」新增<b>物资编码</b>与<b>产品批号</b>两列（新增 / 编辑 / 按模板导入都能填），搜索也支持按物资编码、批号查',
+      '<b>药品可以走出入库单了</b>：在「出入库」页的物资搜索框里输入<b>药品名称或物资编码</b>即可选中（候选中标着「药品」），单据照常保存 / 打印 / 导出；出库同样会校验库存是否够',
+      '药品<b>不进入「物资管理」「库存 & 清单」「盘库」</b>，药品台账仍只在「药品管理」页；做过出入库后，药品管理页的<b>库存</b>列会显示结存与单数（鼠标悬停看最近一次出入库时间与单号），效期 / 批号等信息可随时「编辑」修正',
+      '药品未填物资编码也能用：出入库单里按名称照样搜得到（不会自动编造编码）；已有出入库记录的药品不允许删除（避免单据找不到账），编辑则不受影响',
+      '升级前已登记的药品无需重新录入，直接就能在出入库单里选到',
+      '<b>导入弹窗更跟手</b>：「📷 拍照 / 上传图片」与「📄 选择导入文件」点下去会马上显示「正在打开…」，不再让人以为没点上；手机拍的大照片会先在本地<b>压缩</b>再上传，二维码识别明显更快更稳',
+      '<b>新增「分类设置 → 常用单位」</b>：把常打交道的客户 / 领用部门 / 借用人（非本地部门）维护成一份清单，出入库单的客户 / 领用部门、借用单的借用人 / 借出方、单据更正里的往来单位都会给<b>下拉候选</b>；<b>没列出来的照样可以直接手写</b>（支持一次粘贴多行添加、改名、上下调整顺序）',
+      '<b>列表统一把「物资编码」放在第一列</b>：药品管理、坏件管理（新增编码列）、盘点明细 / 盘点表、借用台账、互联查询的 SN 列表等一并调整，找东西先看编码',
+    ],
+  },
+  {
     ver: '0.10.13', title: '系统日志新增「账号操作日志」（大白话 + 登录来源 IP）', date: '2026-09',
     items: [
       '<b>系统日志新增「账号操作日志」</b>：在「全局操作日志」<b>上方</b>单独列出一块，只看<b>账号与权限</b>相关操作——登录 / 退出、初始化管理员、新建 / 修改 / 停用 / 删除账号、修改密码、角色调整、外部对接与钉钉验证等',
       '账号日志按<b>一看就懂</b>的方式显示：<b>时间 · 账号 · 来源 IP · 做了什么 · 结果</b>。如「登录成功」「登录失败：用户名或密码错误」「新建账号「小王」，角色：只读用户」「修改账号「小王」：角色 普通用户 → 只读用户」，<b>能直接看到登录是从哪个 IP 来的</b>，不需要看懂接口路径与状态码',
       '支持按<b>账号</b>、<b>只看成功 / 只看失败</b>、关键词（如“登录”）筛选与翻页；与下方的全局日志各自独立、互不影响',
+      '来源 IP 以<b>发起访问的设备真实 IP</b>为准：以前链路上有代理 / 网关转发时，会把<b>代理的地址</b>（如形如 x.x.x.1 的网关）当成来源记下来，现已修正',
     ],
   },
   {
