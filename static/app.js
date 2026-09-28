@@ -1,17 +1,17 @@
-/* ============================================================
- * 轻量仓库管理 —— 前端 SPA（原生 JS，无构建）
- * ============================================================ */
+
+
+
 'use strict';
 
-/* ---------- 基础工具 ---------- */
+
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-// 允许少量安全标签（<b></b>、<br>）用于富文本展示（如更新日志）：先整体转义再放行这几个标签
+
 const escRich = s => esc(s).replace(/&lt;b&gt;/gi, '<b>').replace(/&lt;\/b&gt;/gi, '</b>').replace(/&lt;br\s*\/?&gt;/gi, '<br>');
 const fmtDT = s => (s || '').slice(0, 16).replace('T', ' ');
 const TYPE_META = { in: { t: '入库', c: 'green' }, out: { t: '出库', c: 'orange' }, count: { t: '盘库', c: 'cyan' } };
-// 借用到期排序：到期日=0，超期 1 天=+1、未到期 1 天=-1（无应还日/已结清放最后）。按该值降序 → 越临近/越超期越靠前
+
 function loanDueVal(l) { if (!l || l.status !== 'out' || l.left == null) return null; return -(Number(l.left) || 0); }
 function loanDueSort(a, b) {
   const va = loanDueVal(a), vb = loanDueVal(b);
@@ -30,7 +30,7 @@ async function api(url, opt = {}) {
   if (opt.body && !(opt.body instanceof FormData)) headers['content-type'] = 'application/json';
   const r = await fetch(url, { headers, ...opt });
   const t = await r.text();
-  let j = null; try { j = JSON.parse(t); } catch { /* ignore */ }
+  let j = null; try { j = JSON.parse(t); } catch {  }
   if (!r.ok) { const m = (j && j.error) || t || ('HTTP ' + r.status); const e = new Error(m); e.status = r.status; throw e; }
   return j ? j.data : null;
 }
@@ -42,10 +42,10 @@ async function download(url, name) {
   a.href = URL.createObjectURL(blob); a.download = name || 'download.xlsx';
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 400);
 }
-// 用浏览器内置 PDF 阅读器预览（带登录令牌取流，而不是下载）。
-// 优先新标签页打开；若弹窗被拦截或无法跳转，则站内 iframe 以内置阅读器兜底展示。
+
+
 function previewPdf(url, title) {
-  const w = window.open('', '_blank'); // 在用户点击事件内先开窗，避免被拦截
+  const w = window.open('', '_blank'); 
   fetch(url, { headers: authHeaders() })
     .then(async r => {
       if (!r.ok) { const t = await r.text(); let m = t; try { m = JSON.parse(t).error || t; } catch {} throw new Error(m); }
@@ -67,7 +67,7 @@ function pdfInlineModal(u, title) {
     foot: '<button class="btn" data-c>关闭</button>' });
   $$('[data-c]', el).forEach(x => x.onclick = close);
 }
-// 直接把 PDF 交给系统打印控件：用隐藏 iframe 载入 blob 后调 print()（不新开标签页、不产生下载文件）
+
 function printPdfBlob(blob) {
   const u = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
   const fr = document.createElement('iframe');
@@ -79,18 +79,18 @@ function printPdfBlob(blob) {
     try {
       const w = fr.contentWindow;
       if (!w) throw new Error('iframe 未就绪');
-      w.focus(); w.print();   // 呼出系统打印控件（打印对话框关闭后本调用才返回）
+      w.focus(); w.print();   
     } catch (e) {
       toast('未能自动呼出打印控件，已改为在新窗口打开 PDF（可在阅读器里打印）', 'err');
       window.open(u, '_blank');
     }
-    // 打印对话框关闭后再延迟回收，避免打断 PDF 读取
+    
     setTimeout(() => { try { fr.remove(); } catch {} URL.revokeObjectURL(u); }, 30000);
   };
   fr.onload = () => setTimeout(fire, 350);
   fr.src = u;
   document.body.appendChild(fr);
-  setTimeout(fire, 3000);   // 兜底：个别内核不触发 onload
+  setTimeout(fire, 3000);   
 }
 async function downloadPost(url, body, name) {
   const r = await fetch(url, { method: 'POST', headers: { ...authHeaders(), 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -98,9 +98,9 @@ async function downloadPost(url, body, name) {
   const blob = await r.blob();
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 300);
 }
-/* ---------- 表格 → 图片（浏览器实时渲染，无第三方依赖） ----------
- * 用当前生效模板解析出的版式（标题 / 信息行 / 表头列 / 页脚行）+ 明细行，在 canvas 上画成一张图片：
- * 既可弹窗预览，也能直接另存为 PNG 发送。与导出的 xlsx 共用同一套模板与列，所以画面一致。 */
+
+
+
 function tableToImage(layout, rows) {
   const DPR = 2, M = 26, PAD = 9, MIN_W = 58, MAX_COL = 320, TARGET_W = 1260;
   const FF = '"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",sans-serif';
@@ -153,12 +153,12 @@ function tableToImage(layout, rows) {
   });
   if (aboveRows.length) y += 10;
   const tableTop = y;
-  // 表格整体底色 + 表头底色
+  
   cx.fillStyle = '#eef2f8'; cx.fillRect(M, y, tableW, headH);
   y += headH;
   body.forEach((r, ri) => { y += rowHs[ri]; });
   const tableBottom = y;
-  // 网格线
+  
   cx.strokeStyle = '#c6cfdb'; cx.lineWidth = 1;
   let gx = M;
   cx.beginPath();
@@ -168,7 +168,7 @@ function tableToImage(layout, rows) {
   cx.moveTo(M, gy + .5); cx.lineTo(M + tableW, gy + .5);
   for (const h of rowHs) { gy += h; cx.moveTo(M, gy + .5); cx.lineTo(M + tableW, gy + .5); }
   cx.stroke();
-  // 表头文字
+  
   cx.font = fs(true, 13); cx.fillStyle = '#1a3c6e';
   let hx = M;
   cols.forEach((c, i) => {
@@ -176,7 +176,7 @@ function tableToImage(layout, rows) {
     arr.forEach((ln, k) => cx.fillText(ln, hx + PAD, tableTop + headH / 2 + (k - (arr.length - 1) / 2) * 17));
     hx += colW[i];
   });
-  // 数据行
+  
   cx.font = fs(false, 13); cx.fillStyle = '#222';
   let ry = tableTop + headH;
   body.forEach((r, ri) => {
@@ -189,13 +189,13 @@ function tableToImage(layout, rows) {
     });
     ry += h;
   });
-  // 页脚（尾行）
+  
   cx.font = fs(false, 12); cx.fillStyle = '#555';
   let fy = tableBottom + 20;
   for (const t of footRows) { cx.fillText(t, M, fy); fy += 22; }
   return { cv, w: imgW, h: imgH };
 }
-// 图片预览弹窗：实时渲染的图片 + 「保存为图片(PNG)」/「导出 xlsx」
+
 function docImageModal(opts) {
   const { title, layout, rows, fileName, note, xlsxBody, xlsxName } = opts || {};
   const { el, close } = modal({ title, wide: true,
@@ -235,7 +235,7 @@ function toast(msg, type = 'ok') {
   txt.className = 'toast-txt';
   txt.textContent = msg;
   d.appendChild(txt);
-  // 底部白色倒计时条：让用户看到该提示还有多久自动消失
+  
   const bar = document.createElement('div');
   bar.className = 'toast-bar';
   d.appendChild(bar);
@@ -260,10 +260,10 @@ function copyText(t) {
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(s).then(done, fallback);
   else fallback();
 }
-/* 日期框统一约束：年份只允许 4 位
- * 不给日期框加 min/max 时，浏览器的「年」段会一直吞数字（实测会变成 202610-10-01 这种 6 位年份，
- * 结果入库时被判为非法日期而静默丢失）；加上范围后年份段最多收 4 位，多敲的数字会自动流到月份 / 日期上。
- * 下面再留一道兜底：万一仍出现非 4 位年份，就清空并提示重选。 */
+
+
+
+
 function guardDateInput(el) {
   if (!el || el.tagName !== 'INPUT' || el.type !== 'date') return;
   if (!el.getAttribute('min')) el.setAttribute('min', '1900-01-01');
@@ -277,8 +277,8 @@ function bindDateGuards() {
     const v = String(el.value || '');
     if (v && !/^\d{4}-/.test(v)) { el.value = ''; toast('年份最多 4 位，请重新选择日期', 'err'); }
   });
-  // 浏览器在“没填完 / 填得超出范围”时不给 value 也不派发 input（只标 badInput）→ 离开该框时提醒一句，
-  // 否则日期会静默变成空值（年份多敲一位就会出现这种情况）。
+  
+  
   document.addEventListener('focusout', e => {
     const el = e.target;
     if (el && el.tagName === 'INPUT' && el.type === 'date' && el.validity && el.validity.badInput) toast('日期没填完整（年份最多 4 位），请重新选择', 'err');
@@ -326,23 +326,141 @@ async function safeRun(fn, loading = true) {
   finally { stop && stop(); }
 }
 
-/* ---------- 全局状态 ---------- */
+
+
+const BATCH = new Map();
+const batchSel = k => { if (!BATCH.has(k)) BATCH.set(k, new Set()); return BATCH.get(k); };
+const batchClear = k => { batchSel(k).clear(); };
+function batchHead(key) { return `<th class="bth"><input type="checkbox" class="ball" data-bk="${key}" title="全选 / 取消全选（当前列表）"></th>`; }
+function batchCell(key, id) { return `<td class="bth"><input type="checkbox" class="bchk" data-bk="${key}" data-id="${Number(id)}"${batchSel(key).has(Number(id)) ? ' checked' : ''}></td>`; }
+function batchBar(key, actions) {
+  const n = batchSel(key).size;
+  return `<div class="batch-bar" data-bk="${key}" style="${n ? '' : 'display:none'}">
+    <span class="tag" data-bn>已选 ${n} 项</span>
+    ${actions.map(a => `<button class="btn sm ${a.cls || ''}" data-bact="${a.key}">${a.label}</button>`).join('')}
+    <button class="btn sm ghost" data-bact="__clear">清空选择</button></div>`;
+}
+function bindBatch(root, key, actions) {
+  root.__batch = root.__batch || {};
+  if (root.__batch[key]) { const bar = $('.batch-bar[data-bk="' + key + '"]', root); if (bar) { const n = batchSel(key).size; bar.style.display = n ? '' : 'none'; const t = $('[data-bn]', bar); if (t) t.textContent = '已选 ' + n + ' 项'; } return; }
+  root.__batch[key] = true;
+  const syncBar = () => {
+    const n = batchSel(key).size;
+    const bar = $('.batch-bar[data-bk="' + key + '"]', root);
+    if (bar) { bar.style.display = n ? '' : 'none'; const t = $('[data-bn]', bar); if (t) t.textContent = '已选 ' + n + ' 项'; }
+  };
+  const clearAll = () => {
+    batchClear(key);
+    $$('input.bchk[data-bk="' + key + '"]', root).forEach(x => { x.checked = false; });
+    const a = $('input.ball[data-bk="' + key + '"]', root); if (a) { a.checked = false; a.indeterminate = false; }
+    syncBar();
+  };
+  root.__batchClear = root.__batchClear || {};
+  root.__batchClear[key] = clearAll;
+  root.addEventListener('change', ev => {
+    const chk = ev.target.closest('input.bchk[data-bk="' + key + '"]');
+    if (chk) { const s = batchSel(key); const id = Number(chk.dataset.id); if (chk.checked) s.add(id); else s.delete(id); syncBar(); return; }
+    const all = ev.target.closest('input.ball[data-bk="' + key + '"]');
+    if (all) {
+      const s = batchSel(key);
+      $$('input.bchk[data-bk="' + key + '"]', root).forEach(x => { const id = Number(x.dataset.id); x.checked = all.checked; if (all.checked) s.add(id); else s.delete(id); });
+      all.indeterminate = false; syncBar();
+    }
+  });
+  root.addEventListener('click', async ev => {
+    const btn = ev.target.closest('[data-bact]'); if (!btn) return;
+    const bar = btn.closest('.batch-bar'); if (!bar || bar.dataset.bk !== key) return;
+    const act = btn.dataset.bact;
+    if (act === '__clear') { clearAll(); return; }
+    const def = actions.find(a => a.key === act); if (!def) return;
+    const ids = [...batchSel(key)];
+    if (!ids.length) { toast('请先勾选条目', 'err'); return; }
+    await def.run(ids, root);
+  });
+  syncBar();
+}
+
+async function runBatch(url, body, after, okWord = '已处理') {
+  const hide = loadingBox('正在处理…');
+  try {
+    const r = await api(url, { method: 'POST', body: JSON.stringify(body) });
+    const parts = [];
+    if (r.changed) parts.push(`${okWord} ${r.changed} 条`);
+    if (r.skipped_count) parts.push(`${r.skipped_count} 条已跳过（${[...new Set((r.skipped || []).map(x => x.reason))].join('、')}）`);
+    toast(parts.join('；') || '没有可处理的条目');
+    after && after(r);
+    return r;
+  } finally { hide(); }
+}
+
+
+function askPick(title, options, { emptyLabel, value, hint } = {}) {
+  return new Promise(res => {
+    let done = false;
+    const { el, close } = modal({ title, small: true,
+      body: `${hint ? `<div class="hint" style="margin-bottom:8px">${hint}</div>` : ''}<select class="input" id="ap-sel">${emptyLabel !== undefined ? `<option value="">${esc(emptyLabel)}</option>` : ''}${options.map(o => `<option value="${esc(o.value)}"${String(o.value) === String(value) ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`,
+      foot: '<button class="btn" data-c>取消</button><button class="btn primary" id="ap-ok">确定</button>' });
+    const finish = v => { if (done) return; done = true; close(); res(v); };
+    const abort = () => { if (done) return; done = true; close(); res(undefined); };
+    $$('[data-c]', el).forEach(x => x.onclick = abort);
+    el.addEventListener('remove', () => { if (!done) { done = true; res(undefined); } });
+    $('#ap-ok', el).onclick = () => finish($('#ap-sel', el).value);
+  });
+}
+
+async function catPickOptions() { try { return (await api('/api/categories')).map(c => ({ value: c.id, label: c.name })); } catch { return []; } }
+async function locPickOptions() { try { return (await api('/api/locations')).map(l => ({ value: l.id, label: l.disp })); } catch { return []; } }
+
+function ledgerExportDialog(kind, label) {
+  const { el, close } = modal({ title: `导出${label}出入库记录`, small: true,
+    body: `<div class="hint" style="margin-bottom:8px">导出指定时间段内<b>全部${esc(label)}</b>的出入库明细：入库单 / 出库单逐行列明（日期、单号、编码、名称、规格、单位、数量、往来单位、经办人、存放位置），末尾附入库 / 出库合计。留空表示不限时间。</div>
+      <div class="split"><label class="field"><span class="lab">开始日期</span><input class="input" type="date" id="lg-from"></label>
+      <label class="field"><span class="lab">结束日期</span><input class="input" type="date" id="lg-to"></label></div>
+      <div class="row-flex" style="gap:6px;margin-top:8px">
+        <button class="btn sm" data-q="month" type="button">本月</button>
+        <button class="btn sm" data-q="year" type="button">本年</button>
+        <button class="btn sm" data-q="90" type="button">近 90 天</button>
+        <button class="btn sm ghost" data-q="all" type="button">不限时间</button>
+      </div>`,
+    foot: '<button class="btn" data-c>取消</button><button class="btn primary" id="lg-go">导出 xlsx</button>' });
+  $$('[data-c]', el).forEach(x => x.onclick = close);
+  const setRange = q => {
+    const t = new Date(), p = n => String(n).padStart(2, '0');
+    const ymd = d => d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    if (q === 'month') { $('#lg-from', el).value = ymd(new Date(t.getFullYear(), t.getMonth(), 1)); $('#lg-to', el).value = today(); }
+    else if (q === 'year') { $('#lg-from', el).value = ymd(new Date(t.getFullYear(), 0, 1)); $('#lg-to', el).value = today(); }
+    else if (q === '90') { $('#lg-from', el).value = ymd(new Date(t.getTime() - 89 * 86400000)); $('#lg-to', el).value = today(); }
+    else { $('#lg-from', el).value = ''; $('#lg-to', el).value = ''; }
+  };
+  setRange('month');
+  $$('[data-q]', el).forEach(b => b.onclick = () => setRange(b.dataset.q));
+  $('#lg-go', el).onclick = async () => {
+    const from = $('#lg-from', el).value, to = $('#lg-to', el).value;
+    const qs = new URLSearchParams();
+    if (from) qs.set('from', from);
+    if (to) qs.set('to', to);
+    close();
+    try { await safeRun(() => download('/api/export/ledger/' + kind + (qs.toString() ? '?' + qs.toString() : ''), label + '出入库记录_' + (from || '起始') + '_' + (to || today()) + '.xlsx')); } catch {}
+  };
+}
+
+
 const state = {
   settings: {},
-  skus: [],          // 全部启用 SKU（含库存快照可选）
+  skus: [],          
   templates: [],
   nav: 'dashboard',
   srv: 'loading',
-  doc: null,         // 预置跳转到出入库
-  interlink: { count: 0 }, // 已启用互联服务器数量
-  devFlow: true,    // 跨库流转已转正（恒为可用；保留字段供旧代码判断）
-  devExtauth: false, // 开发者选项：外部对接验证（预留）是否开启（决定「账号与登录」里配置卡是否显示）
-  devDingtalk: false,// 开发者选项：钉钉对接验证（预留）是否开启（同上）
-  setupDone: true,   // 首次启用引导是否已完成（meta.setup.done）
-  brandLimits: {},   // 仓库素材（Logo / 登录页背景图）的格式、大小、尺寸限制（meta.brandLimits）
-  edition: {},       // 版本特化配置（数据目录 edition.json，与程序/升级包解耦）
-  update: null,      // 版本更新状态（meta.update；未配置更新源时不显示相关设置）
-  hasAdmin: true,    // 本机是否已有管理员账号（meta.auth.has_admin；决定“删除借用记录”用管理员密码还是确认文字）
+  doc: null,         
+  interlink: { count: 0 }, 
+  devFlow: true,    
+  devExtauth: false, 
+  devDingtalk: false,
+  setupDone: true,   
+  brandLimits: {},   
+  edition: {},       
+  update: null,      
+  hasAdmin: true,    
 };
 let allSkusCache = null;
 async function getSkus(force) {
@@ -353,34 +471,36 @@ async function getSkus(force) {
 async function refreshTemplates() { state.templates = await api('/api/templates'); }
 function skuById(id) { return (allSkusCache || state.skus).find(s => s.id === Number(id)) || null; }
 
-/* ---------- 物资下拉框搜索（物资多时快速定位） ----------
- * 原生 <select> 不能内置搜索，这里在其上方插入搜索框 + 自动展开的候选列表：
- *  - 输入关键词即按“物资编码 / 名称 / 规格 / 存放位置”过滤，并自动列出匹配条目；
- *  - 候选条目统一显示为「物资编码|名称 · 规格（超 25 字截断） · 存放位置」，点一下即选中（↑↓ 选择、Enter 确认、Esc 清空）；
- *  - 只重建 <option>、不改动 select 的 value，因此各页面固有的 onchange 逻辑不受影响。
- * 适用范围：出入库明细、借用明细、SN 页筛选、SN 批量录入等所有“选物资”的下拉框。 */
+
+
+
+
+
+
 function skuSpecText(spec, n = 25) {
   const s = String(spec == null ? '' : spec).replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
-// 物资条目统一显示文案：物资编码|名称 · 规格（25 字截断） · 存放位置（药品隐藏档案另带「批号 X」与「药品」）
+
 function skuOptText(x) {
+  const kind = String(x.kind || '');
   const parts = [String(x.name == null ? '' : x.name).trim()].filter(Boolean);
   const sp = skuSpecText(x.spec, 25); if (sp) parts.push(sp);
   const batch = String(x.med_batch == null ? '' : x.med_batch).trim(); if (batch) parts.push('批号 ' + skuSpecText(batch, 20));
-  // 药品隐藏档案额外带单位（盒 / 瓶 / 支…），出入库选药时一眼看到单位
+  
   const unit = String(x.unit == null ? '' : x.unit).trim();
-  if (unit && String(x.kind || '') === 'med') parts.push(unit);
+  if (unit && (kind === 'med' || kind === 'off')) parts.push(unit);
   const loc = String(x.location == null ? '' : x.location).trim(); if (loc) parts.push(loc);
-  if (String(x.kind || '') === 'med') parts.push('药品');
+  if (kind === 'med') parts.push('药品');
+  else if (kind === 'off') parts.push('办公物资');
   const rest = parts.join(' · ');
   const code = String(x.sku_code == null ? '' : x.sku_code).trim();
   return code ? (rest ? code + '|' + rest : code) : rest;
 }
-// 搜索用的隐藏文本：编码 / 名称 / 规格 / 位置 / 单位 / 批号（药品还带“药品”字样）都参与匹配（与显示文案一致，都能搜到）
+
 function skuOptKey(x) {
-  const med = String(x.kind || '') === 'med';
-  return [x.sku_code, x.name, x.spec, x.location, x.unit, x.med_batch, med ? '药品' : ''].map(v => String(v == null ? '' : v)).join(' ');
+  const kind = String(x.kind || '');
+  return [x.sku_code, x.name, x.spec, x.location, x.unit, x.med_batch, kind === 'med' ? '药品' : (kind === 'off' ? '办公物资' : '')].map(v => String(v == null ? '' : v)).join(' ');
 }
 function skuOptAll(sel) {
   if (!sel._skuAll) sel._skuAll = Array.from(sel.options).map(o => ({ value: o.value, text: o.textContent, key: o.dataset.k || o.textContent }));
@@ -400,7 +520,7 @@ function filterSkuSelect(sel, kw) {
   for (const o of list) { const op = document.createElement('option'); op.value = o.value; op.textContent = o.text; if (o.key) op.dataset.k = o.key; sel.appendChild(op); }
   sel.value = cur;
 }
-// 给物资下拉框装搜索框 + 自动展开的候选列表（返回搜索输入框，调用方可据此保存关键词以便重绘后恢复）
+
 function attachSkuSearch(sel, opts) {
   if (!sel || sel.dataset.skuSearch === '1') return null;
   sel.dataset.skuSearch = '1';
@@ -418,7 +538,7 @@ function attachSkuSearch(sel, opts) {
   const paintActive = () => Array.from(sug.children).forEach((el, i) => el.classList.toggle('on', i === active));
   const pick = v => {
     if (!v) return;
-    box.value = ''; box.dispatchEvent(new Event('input', { bubbles: true }));   // 先清关键词（部分页面会重绘），避免选中后残留过滤
+    box.value = ''; box.dispatchEvent(new Event('input', { bubbles: true }));   
     sel.value = v;
     sel.dispatchEvent(new Event('change', { bubbles: true }));
     hideSug();
@@ -438,7 +558,7 @@ function attachSkuSearch(sel, opts) {
     }).join('');
     sug.hidden = false;
   };
-  sug.addEventListener('pointerdown', e => { if (e.target.closest('.sku-sug-item')) e.preventDefault(); });  // 防止 blur 先关掉面板
+  sug.addEventListener('pointerdown', e => { if (e.target.closest('.sku-sug-item')) e.preventDefault(); });  
   sug.addEventListener('click', e => { const it = e.target.closest('.sku-sug-item'); if (it) pick(it.dataset.v); });
   box.addEventListener('input', () => { filterSkuSelect(sel, box.value); drawSug(); });
   box.addEventListener('focus', drawSug);
@@ -456,7 +576,7 @@ function attachSkuSearch(sel, opts) {
   return box;
 }
 
-/* ---------- 导航 ---------- */
+
 const PAGES = [
   { g: '业务操作', items: [['dashboard', '🏠', '仪表盘'], ['io', '📥', '出入库'], ['count', '📋', '盘库'], ['docs', '🧾', '单据流水'], ['loans', '🔖', '物资借用'], ['flows', '🔄', '跨库流转']] },
   { g: '基础资料', items: [['skus', '📦', '物资管理'], ['categories', '🗂️', '分类设置'], ['stock', '🗃️', '库存 & 清单']] },
@@ -466,7 +586,7 @@ const PAGES = [
 function navGroups() {
   const gs = PAGES.map(g => ({ ...g }));
   const hidden = ED().hidden_pages;
-  // 跨库流转等页面：已转正，恒显示（保持过滤逻辑以防将来再挂开关）；hidden_pages 由版本特化配置裁剪
+  
   gs.forEach(gr => { gr.items = gr.items.filter(([k]) => !(k === 'flows' && !state.devFlow) && !hidden.includes(k)); });
   if (((state.interlink || {}).count) > 0) gs.splice(1, 0, { g: '多仓互联', items: [['interlink', '🌐', '互联仓库']] });
   return gs.filter(g => g.items.length);
@@ -485,13 +605,13 @@ function buildNav() {
   }).join('');
   $$('#nav .nav-group', nav).forEach(el => el.onclick = () => { el.parentElement.classList.toggle('collapsed'); toggleNavCollapsed(el.dataset.g); refreshNav(); });
 }
-// 按当前 meta 重建侧栏并保持高亮（互联存在与否变化后调用）
+
 function refreshNav() {
   buildNav();
   $$('.nav-btn[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === state.nav));
 }
 const TITLES = { dashboard: '仪表盘', io: '出入库', count: '盘库', docs: '单据流水', skus: '物资管理', categories: '分类设置', stock: '库存 & 清单', sn: 'SN 管理', interlink: '互联仓库', instruments: '计量器具', medicines: '药品管理', damages: '坏件管理', loans: '物资借用', office: '办公物资', flows: '跨库流转', docdetail: '单据详情', templates: '模板设置', settings: '系统设置' };
-/* 明暗主题：持久化到 localStorage，作用于 <html data-theme> */
+
 function setTheme(t) {
   const dark = t === 'dark';
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
@@ -504,8 +624,8 @@ function initTheme() {
   setTheme(t === 'dark' ? 'dark' : 'light');
   const b = $('#theme-btn'); if (b) b.onclick = () => { const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; localStorage.setItem('thm_theme', cur); setTheme(cur); };
 }
-/* 仓库标识：名称/Logo/背景图（在侧栏、浏览器标题、登录页应用）*/
-// 默认 Logo 取自版本特化配置（edition.json 的 logo），未配置时用程序内置 /logo.svg
+
+
 function brandAssets() {
   const s = state.settings || {};
   return {
@@ -519,12 +639,20 @@ function applyBrand() {
   const l = $('#brand-logo'); if (l) l.innerHTML = logo ? `<img src="${logo}" alt="logo">` : '仓';
   const n = $('#brand-name'); if (n) n.textContent = name;
   document.title = name + ' · ' + ED().short_name;
+  setFavicon(logo);   
 }
-/* ============================================================
- * 地址栏路由（hash）：每个界面都有独立链接，可书签/快捷方式直达
- *   例：#/dashboard  #/skus?all=1  #/sn  #/instruments
- *       #/docs?q=IN2026  #/loans  #/interlink?peer=1  #/settings
- * ============================================================ */
+
+function setFavicon(url) {
+  const href = url || '/logo.svg';
+  let l = document.querySelector('link[rel="icon"]');
+  if (!l) { l = document.createElement('link'); l.rel = 'icon'; document.head.appendChild(l); }
+  if (l.getAttribute('href') !== href) l.setAttribute('href', href);
+}
+
+
+
+
+
 const HASH_PARAM_KEYS = ['all', 'peer', 'sku_id', 'q', 'status', 'id', 'draft', 'cat', 'loc'];
 function syncHash(view, param) {
   try {
@@ -536,7 +664,7 @@ function syncHash(view, param) {
     }
     const target = '#/' + view + (q.length ? '?' + q.join('&') : '');
     if ((location.hash || '') !== target) history.replaceState(null, '', target);
-  } catch { /* ignore */ }
+  } catch {  }
 }
 function readHash() {
   const raw = (location.hash || '').replace(/^#\/?/, '');
@@ -560,14 +688,14 @@ function readHash() {
   }
   return { view, param };
 }
-/* ---------- 页面状态暂存 ----------
- * 切到别的选项卡时，把当前视图的 DOM（含未提交表单、搜索、选中、滚动位置）暂存；
- * 切回同一视图（同一参数）时直接还原、不重新渲染 → 编辑状态原样保留。
- * 数据有变化的入口请用 show(view, param, { force: true }) 强制重新拉取渲染。
- * 概览(dashboard)/设置(settings) 是“活的快照”，始终每次重新渲染，不暂存。
- */
+
+
+
+
+
+
 const NO_CACHE_VIEWS = new Set(['dashboard', 'settings']);
-const VIEW_CACHE = new Map();   // key -> { frag, scroll }
+const VIEW_CACHE = new Map();   
 let curViewKey = null;
 const isCacheable = view => !NO_CACHE_VIEWS.has(view);
 function viewCacheKey(view, param) {
@@ -582,8 +710,8 @@ function viewCacheKey(view, param) {
 }
 async function show(view, param, opts) {
   const a = state.auth;
-  if (a && a.mode === 'login' && !a.current) { showLogin(); return; } // 开启登录验证且未登录：任何页面都不开放
-  if (ED().hidden_pages.includes(view)) { view = 'dashboard'; param = null; } // 版本特化配置里隐藏的页面（如特供版裁掉某些页）
+  if (a && a.mode === 'login' && !a.current) { showLogin(); return; } 
+  if (ED().hidden_pages.includes(view)) { view = 'dashboard'; param = null; } 
   state.nav = view;
   $$('.nav-btn[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   $('#page-title').textContent = TITLES[view] || '';
@@ -592,16 +720,16 @@ async function show(view, param, opts) {
   const force = !!(opts && opts.force);
   const key = viewCacheKey(view, param);
   const v = $('#view');
-  // 已在同一视图（同参数）：无需重绘（除非强制刷新）
+  
   if (curViewKey === key && !force) return;
-  // 离开当前视图：若其可缓存，先暂存 DOM（保留编辑 / 滚动状态）
+  
   if (curViewKey && curViewKey !== key && isCacheable(curViewKey.split('|')[0])) {
     const frag = document.createDocumentFragment();
     while (v.firstChild) frag.appendChild(v.firstChild);
     const prev = VIEW_CACHE.get(curViewKey);
     VIEW_CACHE.set(curViewKey, { frag, scroll: prev ? (prev.scroll || 0) : 0 });
   }
-  // 命中暂存：直接还原（不重新渲染 → 表单 / 搜索 / 滚动原样保留）
+  
   if (isCacheable(view) && !force && VIEW_CACHE.has(key)) {
     const c = VIEW_CACHE.get(key);
     v.innerHTML = '';
@@ -616,7 +744,7 @@ async function show(view, param, opts) {
   curViewKey = key;
   v.scrollTop = 0;
   inAnim(v);
-  // 内存守护：缓存键过多时丢弃最旧，保证活跃页面优先
+  
   if (VIEW_CACHE.size > 30) {
     const it = VIEW_CACHE.keys().next();
     if (!it.done) VIEW_CACHE.delete(it.value);
@@ -624,20 +752,20 @@ async function show(view, param, opts) {
 }
 window.addEventListener('hashchange', () => { const r = readHash(); if (r) show(r.view, r.param); });
 function actions(html) { $('#page-actions').innerHTML = html; }
-// 视图切换过渡：每次 show（新渲染或暂存还原）都重播一次淡入+轻微上移
+
 function inAnim(v) {
   v.classList.remove('anim');
-  void v.offsetWidth; // 强制重排，确保 class 重加后动画重播
+  void v.offsetWidth; 
   v.classList.add('anim');
 }
 
-/* ============================================================
- * 通用表格列排序：点击表头在“升序 ↔ 降序”间切换，DOM 级对 <tbody> 行重排。
- * 适用于所有 <table class="tbl"> 列表页；以下情况不排序：
- *   - 表带 data-nosort（如 分类/存放位置 树）
- *   - 表头含输入控件（如复选框列）/ 末尾“操作”列 / 内含按钮或链接的单元格点击
- * 数值列（数量/日期/端口等可解析数字）按数值比较，其余按中文本地化文本比较。
- * ============================================================ */
+
+
+
+
+
+
+
 function sortCellText(td) {
   const t = (td ? td.textContent : '').trim();
   const c = t.replace(/,/g, '').trim();
@@ -657,7 +785,7 @@ function sortTableRows(table, idx, dir) {
   const data = [], tails = [];
   for (const tr of rows) {
     const first = tr.querySelector('td');
-    if (!first || first.hasAttribute('colspan')) tails.push(tr); // 空态占位行沉底
+    if (!first || first.hasAttribute('colspan')) tails.push(tr); 
     else data.push(tr);
   }
   data.sort((A, B) => {
@@ -678,7 +806,7 @@ document.addEventListener('click', e => {
   const table = th.closest('table.tbl');
   if (!table || table.hasAttribute('data-nosort')) return;
   const tr = th.parentElement; if (!tr) return;
-  if (tr.lastElementChild === th) return; // 末尾操作列不排序
+  if (tr.lastElementChild === th) return; 
   if (th.querySelector('input,select,textarea,button')) return;
   const idx = Array.prototype.indexOf.call(tr.children, th);
   const prev = table._sort || {};
@@ -687,13 +815,13 @@ document.addEventListener('click', e => {
   sortTableRows(table, idx, dir);
 });
 
-/* ============================================================
- * 视图：仪表盘
- * ============================================================ */
+
+
+
 async function renderDashboard(v) {
   const data = await api('/api/dashboard');
   const recent = data.recent || [];
-  const loansBox = (data.loans_active || []).slice().sort(loanDueSort); // 借用·在借：到期日=0，超期=+N / 未到期=-N，降序=越紧急越靠前
+  const loansBox = (data.loans_active || []).slice().sort(loanDueSort); 
   v.innerHTML = `
   <div class="grid stat">
     <div class="stat-card"><div class="k">物资数（启用）</div><div class="v">${data.sku_count}</div></div>
@@ -702,7 +830,7 @@ async function renderDashboard(v) {
     <div class="stat-card"><div class="k">低库存提醒（≤${data.low_threshold}）</div><div class="v">${data.low_stock.length}</div></div>
   </div>
   ${(() => {
-    // 待我处理：默认常显、独立于跨库流转开关；内容=跨库流转待确认(仅开启时) + 暂存草稿
+    
     const dft = data.drafts || [], ft = state.devFlow ? (data.flow_todo || []) : [];
     let html = '';
     if (ft.length) html += ft.map(x => `<div class="todo-row al-blue">
@@ -713,7 +841,7 @@ async function renderDashboard(v) {
         <span class="badge ${d.kind === 'count' ? 'cyan' : (d.type === 'in' ? 'green' : 'orange')}">暂存 · ${d.kind === 'count' ? '盘库' : (d.type === 'in' ? '入库' : '出库')}</span>
         <div class="grow"><b>${esc(d.title || '未命名草稿')}</b><div class="muted" style="font-size:12px">暂存于 ${esc(String(d.updated_at || '').slice(0, 16))}</div></div>
         <button class="btn sm primary" data-draft-go="${d.id}" data-kind="${d.kind}">继续编辑</button></div>`).join('');
-    // 新版本提示（更新源配置好并检查到新版本时出现）
+    
     const U = state.update || null;
     if (U && U.has_update) {
       const uv = (U.latest && U.latest.version) || U.latest_version || '';
@@ -783,7 +911,7 @@ async function renderDashboard(v) {
   $$('[data-draft-go]', v).forEach(b => b.onclick = () => { const id = Number(b.dataset.draftGo); const view = b.dataset.kind === 'count' ? 'count' : 'io'; show(view, { draft: id }); });
   const tdD = $('#td-drafts', v); if (tdD) tdD.onclick = () => draftsModal();
 }
-// 低库存待关注范围设置：阈值 + 单件开关 + 按分类批量
+
 async function lowWatchModal(after) {
   const data = await api('/api/low-watch').catch(() => null);
   if (!data) { toast('读取关注范围失败', 'err'); return; }
@@ -827,17 +955,17 @@ async function lowWatchModal(after) {
   $('#lw-list', el).addEventListener('click', e => { const b = e.target.closest('button[data-sku]'); if (b) { const it = data.items.find(x => x.id === Number(b.dataset.sku)); setIt({ sku_id: Number(b.dataset.sku), watch: it && it.low_watch === 1 ? 0 : 1 }, it && it.low_watch === 1 ? '已忽略该物资' : '已纳入提醒'); } });
 }
 
-/* ============================================================
-/* ============================================================
- * 视图：分类设置（物资类别 / 存放位置 两类下拉数据源）
- * ============================================================ */
+
+
+
+
 const KIND = {
   material: { label: '物资类别', note: '用作盘库表“物资类别”列与物资归类下拉。', api: '/api/categories' },
   location: { label: '存放位置', note: '用作“存放位置”下拉（物资存放位置、盘点明细等）。', api: '/api/locations' },
   unit: { label: '常用单位', note: '客户 / 领用部门 / 借用人 等“非本地部门”的输入候选。', api: '/api/common-units' },
 };
-/* 常用单位：维护一份全局 <datalist id="unit-list">，凡绑了 list="unit-list" 的输入框
- * 都能下拉选、也照样能手写（原生 datalist：有候选提示，但不限制输入内容）。 */
+
+
 let unitCache = null;
 async function ensureUnitOptions(force) {
   if (!force && Array.isArray(unitCache)) return unitCache;
@@ -849,8 +977,8 @@ async function ensureUnitOptions(force) {
 }
 async function renderCategories(v) {
   let mode = 'material';
-  const folded = {}; // 存放位置页：仓库行折叠状态（true=已折叠分区）
-  let foldInit = false; // 首次渲染时把全部仓库置为折叠（之后按用户的选择走）
+  const folded = {}; 
+  let foldInit = false; 
   const paint = async () => {
     const k = KIND[mode];
     const list = await api(k.api);
@@ -865,7 +993,7 @@ async function renderCategories(v) {
     const head = $('#cat-head'); const body = $('#cat-body');
     if (!head || !body) return;
     if (mode === 'unit') {
-      // 常用单位：仅供输入候选，不限制手写；支持上移 / 下移 / 改名 / 删除
+      
       head.innerHTML = '<tr><th style="width:80px">序号</th><th>单位名称</th><th style="width:230px">操作</th></tr>';
       body.innerHTML = list.length ? list.map((u, i) => `<tr>
         <td class="num">${i + 1}</td><td><b>${esc(u)}</b></td>
@@ -896,7 +1024,7 @@ async function renderCategories(v) {
     } else {
       head.innerHTML = '<tr><th>层级</th><th>名称（分区保存后显示为：仓库名＋区名）</th><th class="num">使用数</th><th class="num">排序</th><th>备注</th><th style="width:340px">操作</th></tr>';
       const tops = list.filter(l => !l.parent_id);
-      // 默认折叠：首次渲染把所有仓库收起（用户点过展开/折叠后按用户的选择保留）
+      
       if (!foldInit) { tops.forEach(t => { folded[t.id] = true; }); foldInit = true; }
       const kidsOf = pid => list.filter(c => c.parent_id === pid);
       const rowHtml = (r, isTop) => `<tr ${isTop ? `data-wh="${r.id}"` : `data-par="${r.parent_id}"`} ${isTop && folded[r.id] ? 'class="wh-collapsed"' : ''}>
@@ -947,7 +1075,7 @@ async function renderCategories(v) {
     itemModal(mode, null, null, paint);
   };
   $('#cat-body', v).addEventListener('click', async e => {
-    // 常用单位：上移 / 下移 / 改名 / 删除（全量保存，原子）
+    
     const ub = e.target.closest('[data-u]');
     if (ub) {
       const i = Number(ub.dataset.i); const act = ub.dataset.u;
@@ -988,7 +1116,7 @@ async function renderCategories(v) {
         }
       })();
     } else {
-      // 存放位置：仓库 / 分区
+      
       api('/api/locations').then(async list => {
         const cur = list.find(x => x.id === id) || null;
         const parent = cur && cur.parent_id ? (list.find(x => x.id === cur.parent_id) || null) : null;
@@ -1076,7 +1204,7 @@ function catModal(id, mode, after) {
   if (!id) return open(null);
   api(k.api).then(list => open(list.find(x => x.id === id) || null));
 }
-/* 常用单位：新增（支持一次粘贴多行）/ 改名（均为全量保存，原子） */
+
 function unitModal(item, list, after) {
   const isEdit = item != null;
   const { el, close } = modal({ title: isEdit ? '修改常用单位' : '添加常用单位', small: true,
@@ -1109,9 +1237,9 @@ function unitModal(item, list, after) {
   };
 }
 
-/* ============================================================
- * 视图：物资管理
- * ============================================================ */
+
+
+
 async function renderSkus(v, param) {
   const loading = loadingBox();
   let rows;
@@ -1119,23 +1247,39 @@ async function renderSkus(v, param) {
   let cats = []; try { cats = await api('/api/categories'); } catch {}
   const uni = arr => [...new Set(arr.map(x => String(x == null ? '' : x).trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh'));
   const fil = { q: '', cat: '', loc: '', unit: '' };
-  if (param && param.cat) fil.cat = String(param.cat); // 从分类页跳入：直接筛出该分类
-  if (param && param.loc) fil.loc = String(param.loc); // 从存放位置页跳入：直接筛出该库位
-  // 物资默认顺序：按物资类别“排序值”分组（小在前，未设类别排最后），同类别内再按编码升序 → 可在 分类设置 里用 ▲/▼ 指定顺序
+  if (param && param.cat) fil.cat = String(param.cat); 
+  if (param && param.loc) fil.loc = String(param.loc); 
+  
   const catSortOf = n => { const c = cats.find(x => x.name === n); return c ? (Number(c.sort) || 0) : 999; };
   const base = rows.slice().sort((a, b) => (catSortOf(a.category_name) - catSortOf(b.category_name)) || String(a.sku_code || '').localeCompare(String(b.sku_code || ''), 'zh') || (a.id - b.id));
   const catOpts = uni(rows.map(r => r.category_name).concat(cats.map(c => c.name)));
   const locOpts = uni(rows.map(r => r.location));
   const unitOpts = uni(rows.map(r => r.unit));
   const selOpt = (id, opts, emptyLabel) => `<select class="input" id="${id}" style="min-width:150px"><option value="">${emptyLabel}</option>${opts.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select>`;
-  let bmode = false; // 批量删除模式
-  const bsel = new Set(); // 已勾选的物资 id（仅当前筛选列表内）
+  const BK = 'skus';   
+  const batchActions = [
+    { key: 'category', label: '🏷 设置类别', run: async ids => {
+        const op = await askPick('批量设置物资类别', await catPickOptions(), { emptyLabel: '— 未分类 —', hint: `已选 ${ids.length} 条物资，设置为：` });
+        if (op === undefined) return;
+        await runBatch('/api/skus/batch', { ids, action: 'category', value: op }, refreshCategories, '已设置类别');
+      } },
+    { key: 'location', label: '📍 设置存放位置', run: async ids => {
+        const op = await askPick('批量设置存放位置', await locPickOptions(), { emptyLabel: '— 清空存放位置 —', hint: `已选 ${ids.length} 条物资，设置为：` });
+        if (op === undefined) return;
+        await runBatch('/api/skus/batch', { ids, action: 'location', location_id: op, value: '' }, refreshCategories, '已设置存放位置');
+      } },
+    { key: 'off', label: '🚫 停用', run: async ids => { await runBatch('/api/skus/batch', { ids, action: 'active', value: 0 }, refreshCategories, '已停用'); } },
+    { key: 'on', label: '✓ 启用', run: async ids => { await runBatch('/api/skus/batch', { ids, action: 'active', value: 1 }, refreshCategories, '已启用'); } },
+    { key: 'del', label: '🗑 删除所选', cls: 'danger', run: async ids => {
+        if (!await confirmBox(`将删除所选 ${ids.length} 条物资。有出入库 / SN 流水记录的会自动跳过（不会破坏账目）。是否继续？`, { danger: true, okText: '删除所选' })) return;
+        await runBatch('/api/skus/batch', { ids, action: 'delete' }, refreshCategories, '已删除');
+      } },
+  ];
   v.innerHTML = `
   <div class="toolbar">
     <input class="input" id="sku-q" placeholder="搜索 物资编码 / 物资名称 / 物资型号" style="min-width:240px" />
     <label class="check"><input type="checkbox" id="sku-all" ${param && param.all ? 'checked' : ''}> 显示已停用</label>
     <div class="spacer"></div>
-    <button class="btn ${bmode ? 'danger' : ''}" id="sku-bdel" title="${bmode ? '' : '启用后在物资前显示复选框，可勾选多条一次删除（有流水/SN 的自动跳过）'}">${bmode ? '✕ 退出批量删除' : '🗑 批量删除'}</button>
     <button class="btn" id="sku-open" title="基于盘库表模板批量建档并导入初始库存">⬆ 盘库表开站导入</button>
     <button class="btn primary" id="sku-new">＋ 新建物资</button>
   </div>
@@ -1147,44 +1291,27 @@ async function renderSkus(v, param) {
     <button class="btn sm ghost" id="sku-fclear">重置筛选</button>
     <span class="tag muted" id="sku-fcnt"></span>
   </div>
-  <div class="toolbar" id="sku-bbar" style="margin-top:8px;display:none;justify-content:flex-start;gap:10px"></div>
+  ${batchBar(BK, batchActions)}
   <div class="card"><div class="tbl-wrap">
   <table class="tbl" id="sku-table">
     <thead id="sku-head"></thead>
     <tbody id="sku-tbody"></tbody>
   </table></div></div>`;
-  const headHtml = () => `<tr>${bmode ? '<th style="width:34px"><input type="checkbox" id="sku-b-all" title="全选当前列表"></th>' : ''}<th>物资编码</th><th>物资名称</th><th>物资型号</th><th>物资类别</th><th class="num">数量</th><th>单位</th><th>存放位置</th><th>SN 管理</th><th>状态</th><th style="width:300px">操作</th></tr>`;
-  const setHead = () => { $('#sku-head', v).innerHTML = headHtml(); };
-  setHead();
-  const bar = () => {
-    const el = $('#sku-bbar', v); if (!el) return;
-    if (!bmode) { el.style.display = 'none'; el.innerHTML = ''; return; }
-    const n = bsel.size;
-    el.style.display = 'flex';
-    el.innerHTML = `<span class="tag">已选 <b>${n}</b> 条物资（仅无流水/SN 的可删，勾选后点下方“删除所选”）</span>
-      <button class="btn sm danger" id="sku-bgo" ${n ? '' : 'disabled'}>删除所选</button>
-      <button class="btn sm ok" id="sku-bselall">全选当前列表</button>
-      <button class="btn sm ghost" id="sku-bclear">清空选择</button>`;
-  };
+  $('#sku-head', v).innerHTML = `<tr>${batchHead(BK)}<th>物资编码</th><th>物资名称</th><th>物资型号</th><th>物资类别</th><th class="num">数量</th><th>单位</th><th>存放位置</th><th>SN 管理</th><th>状态</th><th style="width:300px">操作</th></tr>`;
+  const rowsOf = () => base.filter(s =>
+    (!fil.q.trim() || [s.sku_code, s.name, s.spec].some(x => String(x || '').toLowerCase().includes(fil.q.trim().toLowerCase()))) &&
+    (!fil.cat || s.category_name === fil.cat) && (!fil.loc || s.location === fil.loc) && (!fil.unit || s.unit === fil.unit));
   const refresh = () => { state.skus = []; allSkusCache = null; renderSkus($('#view'), { all: !!(param && param.all) }); };
+  const refreshCategories = () => { batchClear(BK); refresh(); };
   const paint = async () => {
     const stockMap = new Map((await getSkus()).map(s => [s.id, s]));
-    const fq = fil.q.trim().toLowerCase();
-    const list = base.filter(s =>
-      (!fq || [s.sku_code, s.name, s.spec].some(x => String(x || '').toLowerCase().includes(fq))) &&
-      (!fil.cat || s.category_name === fil.cat) &&
-      (!fil.loc || s.location === fil.loc) &&
-      (!fil.unit || s.unit === fil.unit)
-    );
-    const visIds = new Set(list.map(s => s.id));
-    for (const id of [...bsel]) if (!visIds.has(id)) bsel.delete(id);
+    const list = rowsOf();
     $('#sku-fcnt').textContent = `共 ${list.length} / ${rows.length} 条`;
-    bar();
-    const emptyRow = `<tr><td colspan="${bmode ? 11 : 10}"><div class="empty"><div class="big">📦</div>没有符合条件的物资，可调整上方筛选或新建物资</div></td></tr>`;
+    const emptyRow = `<tr><td colspan="11"><div class="empty"><div class="big">📦</div>没有符合条件的物资，可调整上方筛选或新建物资</div></td></tr>`;
     $('#sku-tbody').innerHTML = list.length ? list.map(s => {
       const st = stockMap.get(s.id);
       const qty = st ? (s.sn_managed ? (st.sn_in ?? st.qty) : st.qty) : '—';
-      return `<tr data-id="${s.id}">${bmode ? `<td><input type="checkbox" class="sku-b-cb" data-id="${s.id}" ${bsel.has(s.id) ? 'checked' : ''}></td>` : ''}
+      return `<tr data-id="${s.id}">${batchCell(BK, s.id)}
         <td class="mono">${esc(s.sku_code)}</td><td><a class="link" data-act="detail" data-id="${s.id}" title="查看物资详情">${esc(s.name)}</a></td><td class="muted">${esc(s.spec || '—')}</td>
         <td>${s.category_name ? `<span class="badge blue">${esc(s.category_name)}</span>` : '—'}</td>
         <td class="num">${qty}</td>
@@ -1196,15 +1323,12 @@ async function renderSkus(v, param) {
           ${s.sn_managed && s.active ? `<button class="btn sm" data-act="sns" data-id="${s.id}" title="在本面板管理/编辑该物资的 SN（无需跳转大页）">🔢 SN 管理</button>` : ''}
           <button class="btn sm" data-act="edit" data-id="${s.id}">编辑</button>
           <button class="btn sm" data-act="toggle" data-id="${s.id}">${s.active ? '停用' : '启用'}</button>
-          ${!bmode && s.active ? `<button class="btn sm danger" data-act="del" data-id="${s.id}">删除</button>` : ''}
+          ${s.active ? `<button class="btn sm danger" data-act="del" data-id="${s.id}">删除</button>` : ''}
         </td></tr>`; }).join('') : emptyRow;
-    if (bmode) {
-      const allEl = $('#sku-b-all', v);
-      if (allEl) { allEl.checked = !!list.length && list.every(s => bsel.has(s.id)); allEl.indeterminate = !allEl.checked && list.some(s => bsel.has(s.id)); }
-    }
   };
   if (fil.cat) { const sv = $('#sku-cat', v); if (sv) sv.value = fil.cat; }
   if (fil.loc) { const sv = $('#sku-loc', v); if (sv) sv.value = fil.loc; }
+  bindBatch(v, BK, batchActions);
   paint();
   const q = $('#sku-q', v); let timer;
   q.oninput = () => { clearTimeout(timer); timer = setTimeout(() => { fil.q = q.value; paint(); }, 200); };
@@ -1215,37 +1339,6 @@ async function renderSkus(v, param) {
   $('#sku-all', v).onchange = () => show('skus', { all: $('#sku-all', v).checked ? true : undefined });
   $('#sku-new', v).onclick = () => skuModal(null, refresh);
   $('#sku-open', v).onclick = () => openingImportFlow();
-  // 批量删除开关
-  $('#sku-bdel', v).onclick = () => { bmode = !bmode; bsel.clear(); $('#sku-bdel', v).textContent = bmode ? '✕ 退出批量删除' : '🗑 批量删除'; $('#sku-bdel', v).classList.toggle('danger', bmode); setHead(); paint(); };
-  // 批量删除选择（全选 / 行勾选）
-  $('#sku-table', v).addEventListener('change', e => {
-    const allEl = e.target.closest('#sku-b-all');
-    if (allEl) {
-      const list = base.filter(s => (!fil.q || [s.sku_code, s.name, s.spec].some(x => String(x || '').toLowerCase().includes(fil.q.trim().toLowerCase()))) && (!fil.cat || s.category_name === fil.cat) && (!fil.loc || s.location === fil.loc) && (!fil.unit || s.unit === fil.unit));
-      list.forEach(s => allEl.checked ? bsel.add(s.id) : bsel.delete(s.id));
-      paint(); return;
-    }
-    const cb = e.target.closest('.sku-b-cb');
-    if (cb) { const id = Number(cb.dataset.id); if (cb.checked) bsel.add(id); else bsel.delete(id); paint(); }
-  });
-  $('#sku-bbar', v).addEventListener('click', async e => {
-    const curFiltered = () => { const fq = fil.q.trim().toLowerCase(); return base.filter(s => (!fq || [s.sku_code, s.name, s.spec].some(x => String(x || '').toLowerCase().includes(fq))) && (!fil.cat || s.category_name === fil.cat) && (!fil.loc || s.location === fil.loc) && (!fil.unit || s.unit === fil.unit)); };
-    if (e.target.closest('#sku-bselall')) { curFiltered().forEach(s => bsel.add(s.id)); paint(); return; }
-    if (e.target.closest('#sku-bclear')) { bsel.clear(); paint(); return; }
-    const go = e.target.closest('#sku-bgo');
-    if (go && bsel.size) {
-      if (!await confirmBox(`将删除所选 <b>${bsel.size}</b> 条物资。<br>有出入库/SN 流水记录的会自动保留（只停用不删除）。是否继续？`, { danger: true, okText: '删除所选' })) return;
-      try {
-        const r = await safeRun(() => api('/api/skus/batch-delete', { method: 'POST', body: JSON.stringify({ ids: [...bsel] }) }));
-        const parts = [];
-        if (r.deleted_count) parts.push(`已删除 ${r.deleted_count} 条`);
-        if (r.skipped_count) parts.push(`${r.skipped_count} 条已有流水/SN 被保留（如确需可先清流水再删或停用）`);
-        toast(parts.join('；') || '没有可删除的物资');
-        refresh();
-      } catch {}
-      return;
-    }
-  });
   $('#sku-tbody', v).addEventListener('click', async e => {
     const b = e.target.closest('[data-act]'); if (!b || b.tagName === 'SELECT' || b.tagName === 'INPUT' || b.tagName === 'TEXTAREA') return;
     const id = Number(b.dataset.id); const act = b.dataset.act;
@@ -1256,7 +1349,7 @@ async function renderSkus(v, param) {
     else if (act === 'del') { if (await confirmBox('确认删除该物资？(仅当无历史流水/SN 时可删除)', { danger: true, okText: '删除' })) { try { await safeRun(() => api(`/api/skus/${id}`, { method: 'DELETE' })); toast('已删除'); refresh(); } catch {} } }
   });
 }
-// 物资管理 · 单个 SN 管理物资的 SN 面板（弹层；新增/移出/退回均走正式单据）
+
 function skuSnModal(sku, onMut) {
   const M = { q: '', st: '', sel: new Set() };
   let all = [];
@@ -1271,7 +1364,7 @@ function skuSnModal(sku, onMut) {
       + '</div>'
       + '<div class="hint" style="margin-bottom:8px">针对本物资的 SN 便捷管理：新增 / 移出 / 退回都会生成正式出入库单（保留流水、可撤回）；备注可直接编辑。全库检索仍用左侧「SN 管理」大页。</div>'
       + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:36px"><input type="checkbox" id="snms-all" title="全选当前列表"></th><th>SN 序列号</th><th>状态</th><th>入库时间</th><th>出库单据</th><th>备注</th><th style="width:170px">操作</th></tr></thead><tbody id="snms-body"></tbody></table></div>' });
-  // 轻量叠加层（不破坏外层弹层）
+  
   const ask = opts => new Promise(res => {
     const d = document.createElement('div');
     d.style.cssText = 'position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35)';
@@ -1414,17 +1507,17 @@ function skuModal(id, after) {
     </div>`}`,
       foot: `<button class="btn" data-cancel>取消</button><button class="btn primary" id="f-save">保存</button>`
     });
-    // 大输入框随内容自动增高
+    
     const grow = ta => { ta.style.height = 'auto'; ta.style.height = Math.max(26, ta.scrollHeight) + 'px'; };
     $$('[data-auto]', el).forEach(ta => { ta.addEventListener('input', () => grow(ta)); grow(ta); });
     let sn = snVal;
     const hint = $('#f-snhint', el);
-    // 新建物资：可同时录入「入库数量」并按需带出到入库单界面（编辑模式 / SN 管理时不适用）
+    
     const initWrap = $('#f-initwrap', el);
     const initQty = $('#f-initqty', el);
     const genIn = $('#f-genin', el);
     const syncInit = () => {
-      if (initWrap) initWrap.hidden = !!sn;   // SN 管理物资需逐个登记 SN，不按数量入库
+      if (initWrap) initWrap.hidden = !!sn;   
       if (sn && genIn) genIn.checked = false;
     };
     if (initQty) initQty.addEventListener('input', () => { if (Number(initQty.value) > 0 && genIn) genIn.checked = true; });
@@ -1457,7 +1550,7 @@ function skuModal(id, after) {
         const saved = await safeRun(() => api(sku ? `/api/skus/${sku.id}` : '/api/skus', { method: sku ? 'PUT' : 'POST', body: JSON.stringify(body) }));
         close(); state.skus = []; allSkusCache = null; refreshMeta();
         if (genNewIn && saved && saved.id) {
-          // 带出到「入库单」界面：预填本物资 + 入库数量 + 其预配置的存放位置（可在那边手工修改）
+          
           io.type = 'in';
           io.party = ''; io.operator = state.settings.default_operator || ''; io.location = ''; io.remark = '';
           io.lines = [{ sku_id: saved.id, qty: String(initQtyVal), snText: '', sel: [], skuQ: '', location: saved.location || location || '' }];
@@ -1479,7 +1572,7 @@ function skuModal(id, after) {
     try { const rows = await api('/api/skus?all=1'); const sku = rows.find(r => r.id === Number(id)) || null; paintForm(sku, cats, locs); } catch { paintForm(null, cats, locs); }
   })();
 }
-// 物资详情弹窗（点击物资名称打开）
+
 async function skuDetailModal(id) {
   let s = null, st = null;
   try {
@@ -1524,9 +1617,9 @@ async function skuDetailModal(id) {
   });
 }
 
-/* ============================================================
- * 视图：库存 & 清单
- * ============================================================ */
+
+
+
 async function renderStock(v, param) {
   const loading = loadingBox();
   let rows; try { rows = await getSkus(true); } finally { loading(); }
@@ -1537,6 +1630,23 @@ async function renderStock(v, param) {
   const catOpts = uni(rows.map(r => r.category_name));
   const locOpts = uni(rows.map(r => r.location));
   const sel = (id, opts, emptyLabel) => `<select class="input" id="${id}" style="min-width:150px"><option value="">${emptyLabel}</option>${opts.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select>`;
+  const BK = 'stock';
+  const batchActions = [
+    { key: 'category', label: '🏷 设置类别', run: async ids => {
+        const op = await askPick('批量设置物资类别', await catPickOptions(), { emptyLabel: '— 未分类 —', hint: `已选 ${ids.length} 条，设置为：` });
+        if (op === undefined) return; await runBatch('/api/skus/batch', { ids, action: 'category', value: op }, null, '已设置类别');
+      } },
+    { key: 'location', label: '📍 设置存放位置', run: async ids => {
+        const op = await askPick('批量设置存放位置', await locPickOptions(), { emptyLabel: '— 清空存放位置 —', hint: `已选 ${ids.length} 条，设置为：` });
+        if (op === undefined) return; await runBatch('/api/skus/batch', { ids, action: 'location', location_id: op, value: '' }, null, '已设置存放位置');
+      } },
+    { key: 'off', label: '🚫 停用', run: async ids => { await runBatch('/api/skus/batch', { ids, action: 'active', value: 0 }, null, '已停用'); } },
+    { key: 'on', label: '✓ 启用', run: async ids => { await runBatch('/api/skus/batch', { ids, action: 'active', value: 1 }, null, '已启用'); } },
+    { key: 'del', label: '🗑 删除所选', cls: 'danger', run: async ids => {
+        if (!await confirmBox(`将删除所选 ${ids.length} 条物资。有出入库 / SN 流水记录的会自动跳过（不会破坏账目）。是否继续？`, { danger: true, okText: '删除所选' })) return;
+        await runBatch('/api/skus/batch', { ids, action: 'delete' }, null, '已删除');
+      } },
+  ];
   v.innerHTML = `
   <div class="toolbar">
     <input class="input" id="st-q" placeholder="搜索 编码/名称/型号" style="min-width:220px" />
@@ -1551,9 +1661,10 @@ async function renderStock(v, param) {
     <button class="btn sm ghost" id="st-clear">重置</button>
     <span class="tag muted" id="st-cnt"></span>
   </div>
+  ${batchBar(BK, batchActions)}
   <div class="card"><div class="tbl-wrap">
   <table class="tbl">
-    <thead><tr><th>物资编码</th><th>物资名称</th><th>物资型号</th><th>物资类别</th><th>单位</th><th>存放位置</th><th class="num">当前库存</th><th>模式</th><th class="num">在库SN</th><th style="width:230px">快捷操作</th></tr></thead>
+    <thead><tr>${batchHead(BK)}<th>物资编码</th><th>物资名称</th><th>物资型号</th><th>物资类别</th><th>单位</th><th>存放位置</th><th class="num">当前库存</th><th>模式</th><th class="num">在库SN</th><th style="width:230px">快捷操作</th></tr></thead>
     <tbody id="st-tbody"></tbody>
   </table></div></div>`;
   const paint = () => {
@@ -1565,7 +1676,7 @@ async function renderStock(v, param) {
       (!fil.loc || s.location === fil.loc)
     );
     $('#st-cnt').textContent = `共 ${list.length} / ${base.length} 条`;
-    $('#st-tbody').innerHTML = list.length ? list.map(s => `<tr>
+    $('#st-tbody').innerHTML = list.length ? list.map(s => `<tr>${batchCell(BK, s.id)}
       <td class="mono">${esc(s.sku_code)}</td><td>${esc(s.name)}</td><td class="muted">${esc(s.spec || '—')}</td>
       <td>${s.category_name ? `<span class="badge blue">${esc(s.category_name)}</span>` : '—'}</td>
       <td>${esc(s.unit || '—')}</td><td>${esc(s.location || '—')}</td>
@@ -1577,8 +1688,9 @@ async function renderStock(v, param) {
         <button class="btn sm warn" data-act="out" data-id="${s.id}">出库</button>
         ${s.sn_managed ? `<button class="btn sm" data-act="sn" data-id="${s.id}">SN</button>` : ''}
       </td></tr>`).join('')
-      : `<tr><td colspan="10"><div class="empty"><div class="big">🗃️</div>暂无匹配库存</div></td></tr>`;
+      : `<tr><td colspan="11"><div class="empty"><div class="big">🗃️</div>暂无匹配库存</div></td></tr>`;
   };
+  bindBatch(v, BK, batchActions);
   paint();
   $('#st-q').oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#st-q').value; paint(); }, 200); }; })();
   $('#st-only').onchange = paint;
@@ -1595,13 +1707,13 @@ async function renderStock(v, param) {
 }
 function today() { const d = new Date(); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
 
-/* ============================================================
- * 视图：SN 管理
- * ============================================================ */
+
+
+
 async function renderSn(v, param) {
   const skus = await getSkus();
   const filter = { q: '', status: '', sku_id: param && param.sku_id ? param.sku_id : '' };
-  if (param && param.locate) filter.q = String(param.locate);   // 从全局搜索跳入：按 SN 定位
+  if (param && param.locate) filter.q = String(param.locate);   
   const sel = new Set();
   let cur = [];
   const paintSelBar = () => {
@@ -1671,7 +1783,7 @@ async function renderSn(v, param) {
     const allEl = $('#sn-selall'); if (allEl && cur.length) allEl.checked = cur.every(r => sel.has(r.id));
     paintSelBar();
   });
-  // 点击“出库单号”查看出库单详情
+  
   $('#sn-body').addEventListener('click', e => {
     const a = e.target.closest('a[data-vdoc]'); if (!a) return;
     viewDoc(Number(a.dataset.vdoc));
@@ -1687,8 +1799,8 @@ async function renderSn(v, param) {
   $('#sn-sku').onchange = e => { filter.sku_id = e.target.value; paint(); };
   const snAdd = $('#sn-add', v); if (snAdd) snAdd.onclick = () => snQuickAdd(async () => { state.skus = []; allSkusCache = null; await paint(); });
 }
-// 快速批量录入 SN：在文本框一次输入 / 粘贴多个 SN（支持换行、中英文逗号、分号、空格），
-// 自动去重后为所选 SN 管理物资生成一张入库单，完成批量入库。
+
+
 function snQuickAdd(after) {
   (async () => {
     let skus = []; try { skus = await getSkus(true); } catch {}
@@ -1728,7 +1840,7 @@ function snQuickAdd(after) {
     };
   })();
 }
-// SN 批量操作弹窗：kind=out 批量出库 / kind=in 批量退回入库（均生成单据流水）
+
 async function snBatchRun(kind, rows) {
   const isOut = kind === 'out';
   const skuN = new Set(rows.map(r => r.sku_id)).size;
@@ -1751,10 +1863,10 @@ async function snBatchRun(kind, rows) {
   });
 }
 
-/* ============================================================
- * 视图：出入库（类型可切换，逐行编辑）
- * ============================================================ */
-let activeDraft = null; // 正在编辑/载入的暂存单草稿 {id, kind:'io'|'count', title}
+
+
+
+let activeDraft = null; 
 const io = { type: 'in', party: '', operator: '', location: '', remark: '', date: '', lines: [], flow: false, peerId: null };
 function openDoc(type, skuId) {
   io.type = type;
@@ -1766,7 +1878,7 @@ function openDoc(type, skuId) {
   activeDraft = null;
   show('io', undefined, { force: true });
 }
-// 从「跨库流转」页发起：跳到出库单界面并自动勾选跨库流转
+
 async function startFlowOutDoc() {
   let peers = []; try { peers = await api('/api/peers'); } catch {}
   if (!(peers || []).filter(p => p.enabled).length) return toast('还没有启用中的互联仓库：请先到「系统设置 → 互联服务」添加并启用对方实例', 'err');
@@ -1779,15 +1891,15 @@ async function startFlowOutDoc() {
 }
 async function renderIo(v, param) {
   if (!state.skus.length) await getSkus();
-  // 出入库单额外支持药品：药品台账的「隐藏档案」（含结存）单独取一份并进选择器；
-  // 物资管理 / 库存 & 清单 / 盘库都不含药品（详见 /api/skus、/api/stock 的 kind 过滤）
-  const medSkus = await api('/api/stock?only_med=1').catch(() => []);
-  const skus = medSkus.length ? [...state.skus, ...medSkus] : state.skus;
-  const locs = await api('/api/locations').catch(() => []);   // 存放位置下拉提示（明细行内可直接选 / 也可手输）
-  const peers = await api('/api/peers').catch(() => []);      // 互联仓库（出库单「跨库流转」时用作领用部门）
+  
+  
+  const ledgerSkus = await api('/api/stock?ledger=1').catch(() => []);
+  const skus = ledgerSkus.length ? [...state.skus, ...ledgerSkus] : state.skus;
+  const locs = await api('/api/locations').catch(() => []);   
+  const peers = await api('/api/peers').catch(() => []);      
   const peersOn = (peers || []).filter(p => p.enabled);
   const data = { skus };
-  // 载入暂存草稿：#/io?draft=N（从“待我处理 / 暂存单列表”继续编辑）
+  
   if (param && param.draft) {
     try {
       const d = await api('/api/drafts/' + Number(param.draft));
@@ -1851,7 +1963,7 @@ async function renderIo(v, param) {
   const dateInp = $('#io-date', v);
   if (dateInp) dateInp.onchange = e => { io.date = e.target.value; };
   $('#io-op', v).oninput = e => io.operator = e.target.value;
-  // 存放位置已移到明细行内（#io-loc 不再存在），单据级 location 由服务端按明细行推导
+  
   $('#io-rmk', v).oninput = e => io.remark = e.target.value;
   $('#io-addline', v).onclick = () => { io.lines.push({ sku_id: '', qty: '', snText: '', sel: [], skuQ: '', location: '' }); ioPaintLines(v, data); };
   $('#io-import-qr', v).onclick = qrImportFlow;
@@ -1863,7 +1975,7 @@ async function renderIo(v, param) {
   $('#io-save', v).onclick = () => ioExport(v, data, false);
   ioPaintLines(v, data);
 }
-// 暂存当前出入库草稿（保存单据成功后会自动删除对应草稿）
+
 async function saveIoDraft() {
   const nLines = io.lines.filter(l => l.sku_id).length;
   if (!nLines && !io.party && !io.remark && !io.location) return toast('当前单据内容为空，无需暂存', 'err');
@@ -1877,7 +1989,7 @@ async function saveIoDraft() {
     toast(`${existed ? '已更新' : '已暂存'}草稿 #${r.id}，可在首页「待我处理」继续编辑`);
   } catch (e) { toast(e.message, 'err'); }
 }
-// 暂存单列表：找回 / 载入 / 删除草稿
+
 async function draftsModal(kind) {
   let rows = [];
   const kindName = { io: '出入库', count: '盘库' };
@@ -1912,7 +2024,7 @@ async function draftsModal(kind) {
     if (go) {
       const id = Number(go.dataset.go); const d = rows.find(x => x.id === id); close();
       const view = d && d.kind === 'count' ? 'count' : 'io';
-      // 非强制：若同一草稿已在本会话暂存过（含未保存的后续编辑），直接还原而非重新拉取
+      
       show(view, { draft: id });
     }
   });
@@ -1954,12 +2066,12 @@ function ioPaintLines(v, data) {
     const s = skus.find(x => x.id === Number(l.sku_id));
     const skuSelEl = rowEl.querySelector('[data-f=sku]');
     if (skuSelEl) {
-      const sBox = attachSkuSearch(skuSelEl, { value: l.skuQ || '' });   // 物资下拉搜索框（重绘后恢复关键词）
+      const sBox = attachSkuSearch(skuSelEl, { value: l.skuQ || '' });   
       if (sBox) sBox.addEventListener('input', () => { l.skuQ = sBox.value; });
       skuSelEl.onchange = e => {
         l.sku_id = Number(e.target.value) || '';
         const ns = skus.find(x => x.id === Number(l.sku_id));
-        l.location = ns ? (ns.location || '') : '';   // 自动带出该物资预配置的存放位置（行内可手工改）
+        l.location = ns ? (ns.location || '') : '';   
         ioPaintLines(v, data);
       };
     }
@@ -2010,7 +2122,7 @@ function ioPaintLines(v, data) {
     };
     rowEl.querySelector('[data-act=del]').onclick = () => { io.lines.splice(idx, 1); ioPaintLines(v, data); };
   });
-  // 合计
+  
   let n = 0;
   io.lines.forEach(l => { const s = skus.find(x => x.id === Number(l.sku_id)); if (!s) return; n += s.sn_managed ? (io.type === 'in' ? io.countSn(l) : l.sel.length) : (Number(l.qty) || 0); });
   const tt = $('#io-tot', v); if (tt) tt.textContent = `当前合计数量：${n}`;
@@ -2020,17 +2132,17 @@ function ioCollect() {
   const lines = io.lines.map(l => {
     const s = skuById(l.sku_id) || state.skus.find(x => x.id === Number(l.sku_id));
     if (!s) return null;
-    const lineLoc = String(l.location || '').trim();   // 明细行存放位置（行内维护，缺省由服务端回落物资档案）
+    const lineLoc = String(l.location || '').trim();   
     if (s.sn_managed) {
       let sns = io.type === 'in' ? (l.snText || '').split(/[\s,;，；]+/).map(x => x.trim()).filter(Boolean) : l.sel;
       return { sku_id: s.id, sns, location: lineLoc };
     }
     return { sku_id: s.id, qty: Number(l.qty) || 0, location: lineLoc };
   }).filter(Boolean);
-  // 存放位置按明细行记录（单据级 location 留空，由服务端按明细行推导），因此不再从表头发送
-  // flow/peer_id：出库单勾选「跨库流转」时，保存后自动推送给该互联仓库
+  
+  
   const isFlow = io.type === 'out' && !!io.flow && !!io.peerId;
-  // doc_date：单据日期（补单用），留空 = 服务端按今天；非空时同时决定编号里的日期段
+  
   return { type: io.type, doc_date: io.date || '', party: io.party.trim(), operator: io.operator.trim() || state.settings.default_operator || '', location: '', remark: io.remark.trim(), lines, flow: isFlow, peer_id: isFlow ? io.peerId : null };
 }
 async function ioExport(v, data, preview) {
@@ -2040,7 +2152,7 @@ async function ioExport(v, data, preview) {
     const hide = loadingBox(preview ? '正在渲染预览…' : '处理中…');
     try {
       if (preview) {
-        // 预览：弹窗内实时渲染成图片（不产生文件下载）；需要 xlsx 时在弹窗里单独导出
+        
         const t = await api('/api/export/preview-table', { method: 'POST', body: JSON.stringify(body) });
         docImageModal({
           title: `${TYPE_META[io.type].t}单预览 · 实时渲染`, layout: t.layout, rows: t.rows,
@@ -2057,10 +2169,10 @@ async function ioExport(v, data, preview) {
         const ad = activeDraft; activeDraft = null;
         if (ad && ad.kind === 'io') { try { await api('/api/drafts/' + ad.id, { method: 'DELETE' }); } catch {} }
         io.lines = [];
-        io.date = '';   // 保存后回到“今天”，避免下一单误用上一单的补单日期
+        io.date = '';   
         const dEl = $('#io-date'); if (dEl) dEl.value = today();
         if (body.flow && body.peer_id) {
-          // 勾选了跨库流转：保存后自动推送（失败则登记为待重发，不影响已保存的单据）
+          
           const peerName = io.party || '互联仓库';
           let err = '';
           try { await api('/api/flows/send', { method: 'POST', body: JSON.stringify({ doc_id: docId, peer_id: body.peer_id }) }); }
@@ -2077,7 +2189,7 @@ async function ioExport(v, data, preview) {
     } finally { hide(); }
   } catch (e) { toast(e.message, 'err'); }
 }
-// 「🖨️ 打印」（单据查看 / 单据详情）：取该单据的 PDF（带登录令牌）后直接呼出系统打印控件
+
 async function printDocPdf(id) {
   const hide = loadingBox('正在准备打印…');
   let blob = null;
@@ -2089,8 +2201,8 @@ async function printDocPdf(id) {
   hide();
   printPdfBlob(blob);
 }
-// 更正单据信息：只改「往来单位 / 经办人 / 备注」。
-// **单据日期不可改**（日期决定库存时序与报表归属），明细数量 / SN 也不在此处调整 —— 写错了请撤回后重新录入。
+
+
 async function docFixModal(id, after) {
   let d;
   try { d = await api('/api/docs/' + id); } catch (e) { return toast(e.message, 'err'); }
@@ -2116,7 +2228,7 @@ async function docFixModal(id, after) {
     } catch (e) { toast(e.message, 'err'); }
   };
 }
-// 新版本的两个下载入口（GitHub / Gitee 发布页）；首页「待我处理」、关于页、设置页共用
+
 function updateDlBtns(U) {
   const d = (U && U.downloads) || {};
   const out = [];
@@ -2125,11 +2237,11 @@ function updateDlBtns(U) {
   return out.join('');
 }
 
-/* ============================================================
- * 导入：扫码(图片) 出入库单 / xlsx 批量入库 / 二维码弹窗
- * ============================================================ */
-// 通用文件选择：把 input **挂到页面上**再点（游离节点在部分浏览器里响应慢甚至不弹框），选完 / 取消后立刻移除，
-// 并监听 cancel 事件，避免用户取消后 Promise 悬着。
+
+
+
+
+
 function pickFile({ accept, capture } = {}) {
   return new Promise(res => {
     const p = document.createElement('input');
@@ -2149,18 +2261,18 @@ function pickImage() { return pickFile({ accept: 'image/*', capture: 'environmen
 function pickXlsx() { return pickFile({ accept: '.xlsx' }); }
 function pickJson() { return pickFile({ accept: '.json,application/json,text/plain' }); }
 function uploadFile(url, file) { const fd = new FormData(); fd.append('file', file); return api(url, { method: 'POST', body: fd }); }
-// 系统「选择文件 / 拍照」框由浏览器与操作系统弹出，偶尔会很慢：点下去的瞬间先给即时反馈，别让用户以为没点上
+
 async function withBusy(btn, label, fn) {
   if (!btn) return fn();
   const oldText = btn.textContent, oldW = btn.style.minWidth, wasDisabled = btn.disabled;
   try { btn.style.minWidth = (btn.offsetWidth || 0) + 'px'; } catch {}
   btn.disabled = true; btn.textContent = label;
-  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));   // 让上面的文案先渲染出来
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));   
   try { return await fn(); }
   finally { btn.disabled = wasDisabled; btn.textContent = oldText; btn.style.minWidth = oldW; }
 }
-// 手机拍的照片动辄好几 MB、上千万像素，服务端 jsQR 解码会明显变慢：先等比缩到长边 ≤1600 再上传，
-// 二维码的模块尺寸仍然远大于识别下限，识别率不受影响，上传与解码都快得多。
+
+
 async function shrinkImage(file, maxSide = 1600, quality = 0.92) {
   try {
     if (!file || !/^image\//.test(String(file.type || ''))) return file;
@@ -2175,7 +2287,7 @@ async function shrinkImage(file, maxSide = 1600, quality = 0.92) {
     try { bmp.close && bmp.close(); } catch {}
     const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', quality));
     return blob ? new File([blob], 'qr-photo.jpg', { type: 'image/jpeg' }) : file;
-  } catch { return file; }   // 任何异常都退回原图，功能不受影响
+  } catch { return file; }   
 }
 function qrImportFlow() {
   const { el, close } = modal({ title: '导入出入库单（扫码 / 文件）', small: true,
@@ -2200,7 +2312,7 @@ function qrImportFlow() {
       qrReview(r);
     } catch (e) { toast(e.message, 'err'); }
   });
-  // 文件导入：对方扫码不出来的大单据，改用对方导出的 .json（内容与二维码一致）
+  
   $('#qr-src-file', el).onclick = () => withBusy($('#qr-src-file', el), '📄 正在打开…', async () => {
     const f = await pickJson(); if (!f) return;
     try {
@@ -2226,13 +2338,13 @@ function qrImportFlow() {
   };
   $('#qr-src-live', el).onclick = () => startLiveScan(el);
 }
-// 实时扫码：优先系统 BarcodeDetector（Android Chrome / 桌面），不支持时退回 内置 jsQR 逐帧解码 —— 手机不再依赖“拍照上传”
+
 function startLiveScan(hostEl) {
   const area = $('#qr-src-area', hostEl);
   const hasNative = !!(window.BarcodeDetector);
   const hasJsQR = !!(window.jsQR);
   if (!hasNative && !hasJsQR) { area.innerHTML = '<div class="badge red">当前浏览器不支持实时扫码（无 BarcodeDetector / jsQR）。请改用“拍照 / 上传图片”或“粘贴文本”。</div>'; return; }
-  // 浏览器安全限制：非 https / 非 localhost 的不安全连接，手机浏览器禁止网页直接调起摄像头（getUserMedia / BarcodeDetector 均需安全上下文）
+  
   const secure = !!(window.isSecureContext);
   if (!secure) {
     area.innerHTML = `<div class="badge orange" style="display:inline-block;margin-bottom:8px">⚠️ 当前为<b>不安全连接</b>（非 https、非 localhost）——手机浏览器会禁止网页直接调起摄像头实时扫码。</div>
@@ -2301,7 +2413,7 @@ function startLiveScan(hostEl) {
               if (code && code.data) { onRaw(code.data); return; }
             }
           }
-        } catch { /* 单帧失败忽略 */ }
+        } catch {  }
         finally { busy = false; }
       };
       timer = setInterval(tick, hasNative ? 320 : 240);
@@ -2379,13 +2491,13 @@ function xlsxImportFlow() {
     } catch (e) { toast(e.message, 'err'); }
   })();
 }
-// 导出入库文件(.json)：数据过多扫不出二维码时，把文件发给对方导入（效果与扫码一致）
+
 async function exportDocFile(id, docNo, type) {
   const label = (TYPE_META[type] || {}).t || '单据';
   const name = `${label}单_${docNo || id}.json`;
   try { await safeRun(() => download(`/api/export/docs/${id}/payload.json`, name)); toast('已导出 ' + name); } catch {}
 }
-// 二维码弹窗：先问服务端能否生成（容量预判），能→显示二维码；不能→原位显示提示 + 导出文件按钮
+
 async function openQrModal(id, docNo, type) {
   const tip = (type === 'out')
     ? '此码供<b>他库 / 对端</b>扫码导入：对方将自动按「<b>入库单</b>」入账（本端出库 → 对方入库），备注会标注来源与本单号。'
@@ -2398,7 +2510,7 @@ async function openQrModal(id, docNo, type) {
   const box = $('#qm-box', el);
   let info = null;
   const fileBtn = cls => info.can_file ? `<button class="btn ${cls || ''}" id="qm-json" title="导出 .json 文件，供对方用「导入出入库单 → 选择导入文件」导入">⬇ 导出入库文件（.json）</button>` : '';
-  // 无法生成二维码时原位展示：提示词 + 导出按钮（默认行为）
+  
   const fallback = extra => `<div class="qr-fallback">
       <div class="badge orange" style="margin-bottom:8px">⚠️ 二维码无法生成</div>
       <div class="hint" style="text-align:left">${esc(extra || info.error)}<br>本单共 <b>${info.lines}</b> 条明细${info.sn_count ? '（含 <b>' + info.sn_count + '</b> 个 SN）' : ''}，已超出单张二维码的容量上限。</div>
@@ -2410,7 +2522,7 @@ async function openQrModal(id, docNo, type) {
     box.innerHTML = `<div id="qm-slot"><div class="hint" style="padding:44px 0">二维码生成中…</div></div>
       <div class="row-flex" style="gap:8px;justify-content:center;margin-top:8px">${fileBtn()}</div>
       <div class="hint">数据较多时二维码更密，扫时请靠近 / 光线充足；若对方扫不动，可直接把导出的 <b>.json 文件</b>发给对方导入。</div>`;
-    // 注意：二维码接口需登录，<img> 无法携带会话头（登录模式下会 401）→ 必须先带令牌取回二进制，再转成本地地址显示
+    
     (async () => {
       const slot = $('#qm-slot', el);
       if (!slot) return;
@@ -2419,7 +2531,7 @@ async function openQrModal(id, docNo, type) {
         const r = await fetch(`/api/export/docs/${id}/qr`, { headers: authHeaders() });
         if (!r.ok) { let m = 'HTTP ' + r.status; try { const jj = await r.json(); m = jj.error || m; } catch {} throw new Error(m); }
         objUrl = URL.createObjectURL(await r.blob());
-        const px = info.px || 320;   // 服务端生成的二维码边长：按原尺寸展示，避免缩放到密集二维码上丢模块
+        const px = info.px || 320;   
         slot.innerHTML = `<div class="qr-img-wrap"><img class="qr-img" src="${objUrl}" alt="单据二维码" width="${px}" height="${px}"></div>
           <div class="hint">二维码 ${info.modules} × ${info.modules} 模块 · 容错 ${esc(info.ec)} · 内容 ${info.chars} 字符 · ${px}×${px} px（可直接截图 / 长按保存）</div>`;
       } catch (e2) { box.innerHTML = fallback(e2.message); wire(); }
@@ -2435,7 +2547,7 @@ async function openQrModal(id, docNo, type) {
   }
 }
 
-/* 开站导入：文件必须基于“盘库表模板”制作，反向解析建档，并可选择以某一数量列作为初始库存 */
+
 function openingImportFlow() {
   (async () => {
     const f = await pickXlsx(); if (!f) return;
@@ -2490,7 +2602,7 @@ function openingImportFlow() {
   })();
 }
 
-/* 专项台账（计量器具 / 药品 / 办公物资）：下载导入模板 + 按模板导入 */
+
 const IMP_LABEL = { instruments: '计量器具', medicines: '药品', office: '办公物资', locations: '存放位置' };
 function impDownloadTemplate(kind) {
   return safeRun(() => download(`/api/import/${kind}/template`, (IMP_LABEL[kind] || '导入') + '导入模板.xlsx'));
@@ -2521,7 +2633,7 @@ async function impFlow(kind, after) {
   };
 }
 
-/* 出入库单：按需重导（可改日期/数量，仅影响本次导出的表） */
+
 async function docReprintDialog(id) {
   const d = await api('/api/docs/' + id);
   const doc = d.doc; const lines = d.lines;
@@ -2551,7 +2663,7 @@ async function docReprintDialog(id) {
     $$('#dp-body tr[data-i]', el).forEach(tr => {
       const l = lines[Number(tr.dataset.i)]; const q = tr.querySelector('[data-q]');
       const locEl = tr.querySelector('[data-loc]');
-      const location = locEl ? locEl.value.trim() : '';   // 存放位置按行（已在明细列内）
+      const location = locEl ? locEl.value.trim() : '';   
       if (l.sn) ls.push({ sku_id: l.sku_id, sns: l.sn.split('\n'), location });
       else ls.push({ sku_id: l.sku_id, qty: q ? Number(q.value) : Math.abs(l.qty), location });
     });
@@ -2565,7 +2677,7 @@ async function docReprintDialog(id) {
     } catch (e) { toast(e.message, 'err'); }
   };
 }
-/* 库存清单表：日期/单位设置 */
+
 function inventoryExportDialog(includeZero) {
   const { el, close } = modal({ title: '导出库存清单表', small: true,
     body: `<label class="field"><span class="lab">管理单位名称</span><input class="input" id="il-co" value="${esc(state.settings.company || '')}"></label>
@@ -2580,9 +2692,9 @@ function inventoryExportDialog(includeZero) {
   };
 }
 
-/* ============================================================
- * 视图：盘库
- * ============================================================ */
+
+
+
 async function countExportDialog(ids) {
   const { el, close } = modal({ title: '盘库表 · 手工修正 / 导出', wide: true,
     body: `<div class="row-flex" style="flex-wrap:wrap;gap:10px;align-items:flex-end">
@@ -2653,24 +2765,55 @@ async function countExportDialog(ids) {
     } catch (e) { toast(e.message, 'err'); }
   };
 }
+
+
+let countScope = { cats: null, med: false, inst: false, off: false };
 async function renderCount(v, param) {
-  const skus = await getSkus(true);
+  const skus = await getSkus(true);                                      
   const cats = await api('/api/categories').catch(() => []);
   const locs = await api('/api/locations').catch(() => []);
-  const idsAll = skus.map(s => s.id);
-  const stockById = new Map(skus.map(s => [s.id, s]));
-  // 载入暂存草稿：#/count?draft=N（从“待我处理 / 暂存单列表”继续编辑）
+  
+  const ledgerSkus = await api('/api/stock?ledger=1').catch(() => []);
+  const insts = await api('/api/instruments').catch(() => []);
+  const stockById = new Map([...skus, ...ledgerSkus].map(s => [s.id, s]));
+  
+  const scopeIds = () => {
+    const okCat = s => !countScope.cats || countScope.cats.has(s.category_name || '');
+    const out = [];
+    for (const s of skus) if (okCat(s)) out.push(s.id);
+    for (const s of ledgerSkus) {
+      if (s.kind === 'med' && !countScope.med) continue;
+      if (s.kind === 'off' && !countScope.off) continue;
+      out.push(s.id);
+    }
+    return out;
+  };
+  
+  const instFree = () => countScope.inst ? insts.map(i => ({
+    uid: 'i' + i.id, sys: false, sn: false, inst: true, cur: 1,
+    category: '计量器具', code: i.serial_no || '', name: i.name || '', model: i.spec || '', loc: i.location || '', unit: '台',
+    last: '1', change: '0', calc: '1', actual: '1',
+    remark: ['计量器具', i.expire_date ? '有效期至 ' + i.expire_date : '', i.status === 'sealed' ? '已封存' : ''].filter(Boolean).join(' · '),
+  })) : [];
+  
+  const allCatNames = (() => {
+    const set = new Set();
+    for (const s of skus) set.add(s.category_name || '');
+    return [...set].sort((a, b) => String(a).localeCompare(String(b), 'zh'));
+  })();
+  const catOn = n => !countScope.cats || countScope.cats.has(n);
+  
   let draft = null, meta = {};
   if (param && param.draft) {
     try { const d = await api('/api/drafts/' + Number(param.draft)); if (d && d.kind === 'count') { draft = d; meta = d.payload || {}; activeDraft = { id: d.id, kind: 'count', title: d.title || '' }; } } catch {}
   }
   let base = [];
-  if (!draft) { try { base = (await api('/api/countsheet?ids=' + idsAll.join(','))).rows || []; } catch { base = []; } }
-  // rows：系统行 + 手工新增行（草稿恢复时用草稿里存的行）
+  if (!draft) { try { base = (await api('/api/countsheet?ids=' + scopeIds().join(','))).rows || []; } catch { base = []; } }
+  
   const mkSys = r => ({ uid: 's' + r.sku_id, sys: true, sku_id: r.sku_id, sn: !!r.sn_managed, cur: Number(r.calc) || 0, category: r.category || '', code: r.sku_code, name: r.name, model: r.spec || '', loc: r.location || '', unit: r.unit || '', last: String(r.last), change: '0', calc: String(r.calc), actual: String(r.actual), remark: r.remark || '' });
   const savedRows = draft && Array.isArray(meta.rows) ? meta.rows.map(r => ({ ...r, sku_id: r.sku_id != null ? Number(r.sku_id) : null, cur: Number(r.cur) || 0, last: String(r.last == null ? '0' : r.last), change: String(r.change == null ? '0' : r.change), calc: String(r.calc == null ? '0' : r.calc), actual: String(r.actual == null ? '' : r.actual) })) : [];
   const list = draft ? savedRows.filter(r => r.sys !== false) : base.map(mkSys);
-  const free = draft ? savedRows.filter(r => r.sys === false) : [];
+  const free = draft ? savedRows.filter(r => r.sys === false) : instFree();
   const data = { only: true, list, free, stockById };
   const numOf = v => { const x = parseInt(v, 10); return Number.isFinite(x) ? x : 0; };
   v.innerHTML = `
@@ -2688,7 +2831,21 @@ async function renderCount(v, param) {
         <button class="btn primary" id="ct-submit">✓ 提交盘点（按明细更新库存）</button>
       </div>
     </div>
-    <div class="row-flex" style="margin-top:10px;gap:14px">
+    <div class="row-flex" style="margin-top:10px;gap:10px;align-items:center;flex-wrap:wrap">
+      <span class="tag">盘库范围 · 普通物资分类</span>
+      <span class="chips" id="ct-cats"></span>
+      <button class="btn sm ghost" id="ct-catall" title="全部类别的物资都进本轮盘点">全选分类</button>
+      <button class="btn sm ghost" id="ct-catnone" title="取消所有分类（只盘下方勾选的专项台账）">清空分类</button>
+      <span class="tag muted" id="ct-catcnt"></span>
+    </div>
+    <div class="row-flex" style="margin-top:6px;gap:14px;align-items:center;flex-wrap:wrap">
+      <span class="tag">一并入表（默认不导出、不入盘库表）</span>
+      <label class="check" title="勾选后：药品台账按结存生成盘点行"><input type="checkbox" id="ct-med"> 药品</label>
+      <label class="check" title="勾选后：计量器具按“每台一行”随表登记（仅导出留档，不影响库存）"><input type="checkbox" id="ct-inst"> 计量器具</label>
+      <label class="check" title="勾选后：办公物资台账按结存生成盘点行"><input type="checkbox" id="ct-off"> 办公物资</label>
+      <span class="tag muted">勾选后会计入「导出盘点表 / 提交盘点」，不勾则完全不出现</span>
+    </div>
+    <div class="row-flex" style="margin-top:6px;gap:14px;align-items:center;flex-wrap:wrap">
       <label class="check"><input type="checkbox" id="ct-only" checked> 仅显示有库存物资</label>
       <span class="tag">盘点明细支持逐行手工录入与修正：变化=实物−上次、计算数量=实物（自动算）；导出用顶部日期，不另弹窗。</span>
     </div>
@@ -2768,9 +2925,49 @@ async function renderCount(v, param) {
     if (b.dataset.act === 'delrow' && r) { if (r.sys) list.splice(list.findIndex(x => x.uid === r.uid), 1); else free.splice(free.findIndex(x => x.uid === r.uid), 1); paint(); }
   };
   $('#ct-only', v).onchange = paint;
-  $('#ct-reload', v).onclick = async () => {
-    try { const b2 = (await api('/api/countsheet?ids=' + idsAll.join(','))).rows || []; list.splice(0, list.length, ...b2.map(mkSys)); free.splice(0, free.length); paint(); toast('已恢复系统账面', 'info'); } catch (e2) { toast(e2.message, 'err'); }
+  
+  
+  const hasEdits = () => list.some(r => String(r.actual) !== String(r.cur) || String(r.remark || '') !== '') || free.some(r => !String(r.uid).startsWith('i'));
+  const reload = async ask => {
+    if (ask && hasEdits() && !await confirmBox('重新载入会按新范围重建盘点明细，已录入的实物数量 / 备注将丢失。继续？', { danger: true, okText: '重新载入' })) return false;
+    try {
+      const ids = scopeIds();
+      if (!ids.length) { list.splice(0, list.length); free.splice(0, free.length, ...instFree()); paint(); toast(free.length ? '当前范围只有专项台账行' : '当前范围没有任何物资', 'info'); return true; }
+      const b2 = (await api('/api/countsheet?ids=' + ids.join(','))).rows || [];
+      list.splice(0, list.length, ...b2.map(mkSys)); free.splice(0, free.length, ...instFree());
+      paint(); toast(`已按当前范围载入账面（${list.length + free.length} 行）`, 'info'); return true;
+    } catch (e2) { toast(e2.message, 'err'); return false; }
   };
+  const paintChips = () => {
+    const box = $('#ct-cats', v); if (!box) return;
+    box.innerHTML = allCatNames.length
+      ? allCatNames.map(n => `<button type="button" class="chip${catOn(n) ? ' on' : ''}" data-cat="${esc(n)}" title="点击切换本轮是否盘该类">${esc(n || '未分类')}</button>`).join('')
+      : '<span class="muted" style="font-size:12px">暂无分类</span>';
+    const on = allCatNames.filter(catOn).length;
+    $('#ct-catcnt', v).textContent = `分类 ${on} / ${allCatNames.length}` + (countScope.med ? ' · 含药品' : '') + (countScope.inst ? ' · 含计量器具' : '') + (countScope.off ? ' · 含办公物资' : '');
+  };
+  $('#ct-cats', v).onclick = async e => {
+    const b = e.target.closest('button[data-cat]'); if (!b) return;
+    const name = b.dataset.cat;
+    if (!countScope.cats) countScope.cats = new Set(allCatNames);
+    const had = countScope.cats.has(name);
+    if (had) countScope.cats.delete(name); else countScope.cats.add(name);
+    if (!await reload(true)) { if (had) countScope.cats.add(name); else countScope.cats.delete(name); }
+    paintChips();
+  };
+  $('#ct-catall', v).onclick = async () => { const prev = countScope.cats; countScope.cats = null; if (!await reload(true)) countScope.cats = prev; paintChips(); };
+  $('#ct-catnone', v).onclick = async () => { const prev = countScope.cats; countScope.cats = new Set(); if (!await reload(true)) countScope.cats = prev; paintChips(); };
+  const scopeChk = (id, key) => {
+    const box = $(id, v); if (!box) return;
+    box.checked = !!countScope[key];
+    box.onchange = async () => {
+      const prev = countScope[key]; countScope[key] = box.checked;
+      if (!await reload(true)) { countScope[key] = prev; box.checked = prev; }
+      paintChips();
+    };
+  };
+  scopeChk('#ct-med', 'med'); scopeChk('#ct-inst', 'inst'); scopeChk('#ct-off', 'off');
+  $('#ct-reload', v).onclick = () => reload(true);
   let frSeq = free.reduce((m, r) => { const mm = /^f(\d+)$/.exec(r.uid || ''); return mm ? Math.max(m, Number(mm[1])) : m; }, 0);
   $('#ct-addrow', v).onclick = () => { free.push({ uid: 'f' + (++frSeq), sys: false, sn: false, cur: 0, category: '', code: '', name: '', model: '', loc: '', unit: '', last: '0', change: '0', calc: '0', actual: '', remark: '' }); paint(); };
   $('#ct-draft', v).onclick = () => {
@@ -2821,15 +3018,16 @@ async function renderCount(v, param) {
     if (meta.company !== undefined) $('#ct-co', v).value = meta.company || '';
     activeDraft = { id: draft.id, kind: 'count', title: draft.title || '' };
   }
+  paintChips();
   paint();
 }
 
-/* ============================================================
- * 视图：单据流水
- * ============================================================ */
+
+
+
 let docPage = { type: '', q: '', p: 1, dateFrom: '', dateTo: '' };
 async function renderDocs(v, param) {
-  // 从全局搜索跳入：按单号定位（同时清掉类型 / 时间筛选与页码，保证目标行一定在当前列表里）
+  
   if (param && param.locate) { docPage.type = ''; docPage.q = String(param.locate); docPage.dateFrom = ''; docPage.dateTo = ''; docPage.p = 1; }
   const params = new URLSearchParams();
   if (docPage.type) params.set('type', docPage.type);
@@ -2912,7 +3110,7 @@ async function renderDocs(v, param) {
     } catch (e2) { toast(e2.message, 'err'); }
   };
 }
-// 跨库流转：选择目标库推送本地出入库单（对方人工确认后反向入账）
+
 async function flowSendModal(docId, doc) {
   let peers = []; try { peers = await api('/api/peers'); } catch {}
   const en = (peers || []).filter(p => p.enabled);
@@ -2937,7 +3135,7 @@ async function flowSendModal(docId, doc) {
     state.skus = []; allSkusCache = null; show('flows', undefined, { force: true });
   };
 }
-// 跨库流转管理页（我发出 / 我接收；人工确认、离线重发、撤销协议）
+
 async function renderFlows(v) {
   let list = []; try { list = await api('/api/flows'); } catch { list = []; }
   const send = list.filter(f => f.dir === 'send');
@@ -3051,7 +3249,7 @@ async function viewDoc(id) {
   };
 }
 
-// 单据详情页：进入某张单据的“详细界面”（可由任意单号弹层进入，也可 #/docdetail?id=）
+
 async function renderDocDetail(v, param) {
   const id = Number((param && param.id) || 0);
   if (!id) { v.innerHTML = `<div class="empty"><div class="big">🧾</div>缺少单据编号</div>`; return; }
@@ -3104,9 +3302,9 @@ async function renderDocDetail(v, param) {
     }
   };
 }
-/* ============================================================
- * 视图：模板设置
- * ============================================================ */
+
+
+
 async function renderTemplates(v) {
   await refreshTemplates();
   const tpl = state.templates;
@@ -3155,7 +3353,7 @@ async function renderTemplates(v) {
     try {
       if (act === 'download') await safeRun(() => download(`/api/templates/${key}/download`, typeNames[key] + '.xlsx'));
       else if (act === 'sample') {
-        // 效果示例：本机实时渲染成图片（不依赖服务端原生组件）；失败时回退到旧的服务端 PNG
+        
         try {
           const t = await api(`/api/templates/${key}/layout`);
           docImageModal({ title: `效果示例 · ${typeNames[key]}`, layout: t.layout, rows: t.rows, fileName: `${typeNames[key]}_效果示例.png`,
@@ -3188,18 +3386,18 @@ async function renderTemplates(v) {
   });
 }
 
-/* ============================================================
- * 视图：系统设置
- * ============================================================ */
-/* ============================================================
- * 视图：系统设置（常规 / 账号登录 / 互联服务 / 邮件通知 / 数据维护 / 关于）
- * ============================================================ */
-/* ============================================================
- * 系统设置 · 关于本系统
- * 说明：关于页正文的【程序内置默认】由下方 ABOUT_CFG 控制；
- *       各版本自有的特化内容（产品名 / 文案 / 链接 / 赞赏码 / 更新源…）请放
- *       数据目录的 edition.json —— 首次启动时由程序目录的 edition.default.json 初始化。
- * ============================================================ */
+
+
+
+
+
+
+
+
+
+
+
+
 const ABOUT_CFG = {
   appName: 'ThingsManager · 轻量仓库管理',
   intro: [
@@ -3208,38 +3406,38 @@ const ABOUT_CFG = {
     '首页临期 / 在借提醒、邮件通知自动提醒、互联仓库只读检索',
     '单机运行：SQLite 数据存于本机 data/ 目录，支持一键备份与全量数据包迁移',
   ],
-  // 【替换点】“关于本系统”正文说明（支持简单 HTML，如 <p>…</p>）；为空则显示占位
+  
   noteTitle: '开发缘由 · 联系',
   noteHtml: `<p>本系统源于作者对日常<b>纸质台账填写与人工盘库</b>流程的一点点整理愿望——希望把那些重复、费时的对账与登记工作变得更省心、更清晰，让台账不再“又多又乱”、盘点也不再那么辛苦。</p>
     <p>它借助 <b>DeepSeek</b> 的 Vibe Coding 能力逐步打磨成形。如果它也能帮到你与同事们更高效地管好物资，让台账清爽、盘库轻松，那正是作者最大的心愿。</p>
     <p>使用过程中如遇任何问题，或对功能有想法与建议，欢迎随时来信交流：<a href="mailto:czm233@ypa.moe">czm233@ypa.moe</a>。</p>`,
-  // 右下角常用链接
+  
   links: [
     { label: 'GitHub', url: 'https://github.com/BH6AOV/ThingsManager' },
     { label: 'Gitee', url: 'https://gitee.com/BH6AOV/ThingsManager' },
     { label: '博客 · 橙子木的自言自语', url: 'https://blog.ypa.moe' },
   ],
-  // 【统计】本系统编写统计（可按需更新）：版本号自动取 CHANGELOG 最新
+  
   build: {
     started: '2026-09',
-    // 累计编写量：按本仓库开发会话记录文本估算（精确计费值取决于所用模型 / 账单，此处按本地记录估算）
+    
     tokensEstimate: '1,181,464,440 tokens',
-    milestone: 'V0.0.0 → V0.10.16',
+    milestone: 'V0.0.0 → V0.11.0',
   },
 };
-// 【赞赏码】各版本自有的默认赞赏码**不放这里**，而是放在「程序目录 / edition.default.json」
-//          （首次启动由服务端初始化到数据目录 edition.json；升级包不覆盖数据目录，故各版本升级后特化内容不变）。
-//          这里留空 = 未随包提供默认赞赏码时不显示「☕ 赞赏支持」整块。
+
+
+
 const ABOUT_DONATE = [];
-/* ============================================================
- * 版本特化配置（与程序 / 升级包解耦）
- * ------------------------------------------------------------
- * 程序内置默认 = 下方 EDITION_DEF（即普通版形态）；
- * 若【数据目录】下存在 edition.json，则用它的同名键覆盖（开源版 / 特供版放各自的 Logo、
- * 关于文案、赞赏码、更新源等），因此同一份升级包升级不会冲掉各版本的自有特化内容。
- * 可配置键：app_name / short_name / logo / links / about{intro,noteTitle,noteHtml} /
- *          donate / hidden_pages / update{github,gitee} / mail_footer / edition
- * ============================================================ */
+
+
+
+
+
+
+
+
+
 const EDITION_DEF = {
   app_name: ABOUT_CFG.appName,
   short_name: 'ThingsManager',
@@ -3258,7 +3456,7 @@ function ED() {
   if (!Array.isArray(out.hidden_pages)) out.hidden_pages = [];
   return out;
 }
-// 系统日志：设置（保留天数 / 记录等级）+ 全局操作日志查询界面（仅管理员；日志记录用户所有写操作，无条件记录）
+
 function logsBody(body) {
   if (!currentIsAdmin()) {
     body.innerHTML = `<div class="card"><div class="card-body" style="max-width:640px"><h3 style="margin:0 0 8px">系统日志</h3>
@@ -3268,7 +3466,7 @@ function logsBody(body) {
   }
   const LV = { debug: ['gray', '调试'], info: ['blue', '信息'], warn: ['orange', '警告'], error: ['red', '错误'] };
   let cfg = { days: 30, level: 'info' };
-  // 两个查询区块（顺序即页面顺序）：① 账号操作日志（只看账号 / 登录 / 权限相关接口）② 全局操作日志（全部写操作）
+  
   const BLOCKS = [
     { k: 'acc', ico: '👤', title: '账号操作日志', scope: 'account', plain: true, hint: '只统计<b>账号与权限</b>相关操作：登录 / 退出、初始化管理员、新建 / 修改 / 停用 / 删除账号、修改密码、角色调整，以及外部对接、钉钉等账号验证。每条都写明<b>时间、账号、来源 IP、做了什么、是否成功</b>（失败会写明原因，如“用户名或密码错误”），供日常账号审计使用；日志保留时长与记录等级见上方设置。' },
     { k: 'all', ico: '🗒️', title: '全局操作日志', scope: '', hint: '' },
@@ -3295,7 +3493,7 @@ function logsBody(body) {
       <td><div title="${esc(x.detail || '')}" style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px">${esc(x.detail || '')}</div></td>
     </tr>`).join('')}</tbody></table>` : emptyBox('🗒️', '暂无匹配的日志记录');
   const emptyBox = (ico, msg) => `<div class="empty"><div class="big">${ico}</div>${msg}</div>`;
-  // 账号操作日志：给普通用户看 —— 时间 / 账号 / 来源 IP / 做了什么 / 结果（接口路径与状态码藏进悬停提示）
+  
   const acctRowsHtml = rows => rows.length ? `<table class="tbl"><thead><tr><th style="width:148px">时间</th><th style="width:112px">操作账号</th><th style="width:132px">来源 IP</th><th>操作内容</th><th style="width:76px">结果</th></tr></thead>
     <tbody>${rows.map(x => { const bad = Number(x.status) >= 400; return `<tr>
       <td class="muted mono" style="font-size:12px">${esc(x.ts)}</td>
@@ -3379,7 +3577,7 @@ function logsBody(body) {
   };
   paint();
 }
-// 开发者选项：预留功能开关（需管理员；值存 dev_<key>，不开放未实现功能）
+
 function devBody(body) {
   const admin = currentIsAdmin();
   const paint = features => {
@@ -3500,7 +3698,7 @@ async function renderSettings(v, param) {
   $$('#st-tabs button', v).forEach(b => b.onclick = () => { setTab(b.dataset.t); tabs[b.dataset.t](); });
   tabs[want]();
 }
-// 借用到期提醒：开关 + 默认借期提醒天数（每笔记录可在“物资借用”页“改期”单独设置）
+
 function loanRemindBody(body) {
   const s = state.settings || {};
   const paint = st => {
@@ -3529,7 +3727,7 @@ function generalBody(body, s) {
   s = s || state.settings;
   const asset = f => (state.settings && state.settings[f]) ? `/api/brand/${encodeURIComponent(state.settings[f])}` : '';
   const lg = asset('brand_logo') || ED().logo, bg = asset('brand_bg');
-  // 版本更新：两个更新源都配置好（edition.json → update.github / update.gitee）后才显示本项设置
+  
   const U = state.update || null;
   const updCard = (U && U.available) ? `
   <div class="card" style="margin-top:14px"><div class="card-body" style="max-width:680px">
@@ -3621,7 +3819,7 @@ function generalBody(body, s) {
   };
   bindBrand('logo', '#g-logo-btn', '#g-logo-file', '#g-logo-clear');
   bindBrand('bg', '#g-bg-btn', '#g-bg-file', '#g-bg-clear');
-  // 版本更新（更新源未配置时卡片不存在，整块跳过）
+  
   if ($('#u-source', body)) {
     const saveUpd = async payload => {
       try {
@@ -3644,8 +3842,8 @@ function generalBody(body, s) {
   }
 }
 
-/* ---------- 仓库素材（Logo / 登录页背景图）：限制提示 → 裁切 → 上传 ---------- */
-// 与后端 BRAND_LIMITS 保持一致；meta 未取到时用本备值先把提示显示出来
+
+
 const BRAND_LIMIT_DEF = {
   logo: { label: 'Logo', maxBytes: 2 * 1024 * 1024, maxW: 2048, maxH: 2048, minW: 64, minH: 64 },
   bg: { label: '登录页背景图', maxBytes: 5 * 1024 * 1024, maxW: 4096, maxH: 2160, minW: 800, minH: 450 },
@@ -3667,7 +3865,7 @@ function loadImage(url) {
   });
 }
 function canvasBlob(cv, mime, q) { return new Promise(res => cv.toBlob(b => res(b), mime, q)); }
-// 裁切舞台几何：舞台比裁切框四周各留一圈空白，方便拖动时看到边缘
+
 function cropGeom(kind) {
   const aspect = kind === 'logo' ? 1 : 16 / 9;
   const maxW = Math.min(760, Math.max(260, window.innerWidth - 96));
@@ -3677,7 +3875,7 @@ function cropGeom(kind) {
   while (sh > maxH && sw > 220) { sw -= 24; pad = Math.round(sw * 0.09); cw = sw - 2 * pad; ch = Math.round(cw / aspect); sh = ch + 2 * pad; }
   return { sw, sh, cw, ch, pad, aspect };
 }
-// 在不超过体积上限的前提下输出图片：先降 JPEG 质量，再降分辨率，PNG 过大则改用 JPEG
+
 async function encodeCrop(kind, img, srcMime, sx, sy, sw, sh, L) {
   const k0 = Math.min(1, L.maxW / sw, L.maxH / sh);
   let w = Math.max(16, Math.round(sw * k0)), h = Math.max(16, Math.round(sh * k0));
@@ -3703,7 +3901,7 @@ async function encodeCrop(kind, img, srcMime, sx, sy, sw, sh, L) {
   }
   return { blob: last, mime: mimes[mimes.length - 1], over: true };
 }
-// 选择图片后先做前端校验（格式 / 体积 / 最小尺寸），再打开裁切对话框
+
 async function openBrandCropper(kind, file, onDone) {
   const L = brandLimit(kind);
   const mime0 = String(file.type || '').toLowerCase();
@@ -3788,7 +3986,7 @@ function accountsBody(body) {
   const paint = async () => {
     const mode = a.mode === 'login' ? 'login' : 'open';
     const cur = a.current;
-    // 预留对接配置是否显示，由「系统设置 → 开发者选项」对应开关决定（默认关闭 → 不显示）
+    
     const devExt = !!state.devExtauth, devDt = !!state.devDingtalk;
     const hiddenDev = [devExt ? '' : '外部对接验证（预留）', devDt ? '' : '钉钉对接验证（预留）'].filter(Boolean);
     if (mode === 'open') {
@@ -3818,7 +4016,7 @@ function accountsBody(body) {
       };
       return;
     }
-    // 已启用登录
+    
     const users = await api('/api/users').catch(() => []);
     const admin = cur && cur.role === 'admin';
     body.innerHTML = `<div class="card"><div class="card-body" style="max-width:760px">
@@ -4023,12 +4221,12 @@ async function queryPeerModal(id, p) {
     return rows.map(r => '<tr>' + map[t](r) + '</tr>').join('') || '<tr><td colspan="5"><div class="empty">空</div></td></tr>';
   }
 }
-/* 目录选择弹窗：浏览本机（服务器）文件夹并“点击选择”，返回绝对路径（供数据目录迁移） */
+
 function fsPickDir(initPath) {
   return new Promise((resolve, reject) => {
     let cur = String(initPath || '').trim();
     let parent = null;
-    let done = false; // 只结算一次：close() 会同步触发下面的 remove 监听，若不先置位就会把“已选定”误变成“已取消”
+    let done = false; 
     const { el, close } = modal({ title: '📁 点击选择数据目录', wide: false, body: `
       <div class="hint" style="margin-bottom:10px">这是 <b>本机（服务器）</b> 上的文件夹，逐级点进查找；找到想存放数据的目录后点「选择此目录」即可。</div>
       <div class="row-flex" style="gap:6px;margin-bottom:8px">
@@ -4039,9 +4237,9 @@ function fsPickDir(initPath) {
       <div class="hint" style="margin-top:8px">建议挑选 <b>空目录</b> 或尚未创建的新路径（迁移时会自动创建）；原目录数据保留，不会删除。</div>`,
       foot: '<button class="btn" id="fp-cancel">取消</button><button class="btn primary" id="fp-ok">选择此目录</button>' });
     const box = $('#fp-list', el), pathEl = $('#fp-path', el), upBtn = $('#fp-up', el), okBtn = $('#fp-ok', el);
-    // ⚠️ 选定 / 取消都必须“先记状态、再关窗”：close() 会同步派发 remove 事件，
-    //    旧写法先 close() 再 resolve()，会被 remove 里的 reject('已取消') 抢先生效
-    //    → 选中的目录被当成“已取消”丢弃（表现为点了「用此目录 / 选择此目录」却没记录、无法保存）
+    
+    
+    
     const finish = v => { if (done) return; done = true; close(); resolve(v); };
     const abort = () => { if (done) return; done = true; close(); reject(new Error('已取消')); };
     $('#fp-cancel', el).onclick = abort;
@@ -4052,9 +4250,9 @@ function fsPickDir(initPath) {
       try { r = await api(url); } catch (e) { pathEl.textContent = ''; box.innerHTML = `<div class="empty" style="padding:20px">⚠️ ${esc(e.message)}</div>`; okBtn.disabled = true; return; }
       parent = r.parent || null;
       cur = r.path || '';
-      const atRoots = !!r.roots;                      // 磁盘列表层（最上级）
-      upBtn.disabled = atRoots;                       // 已在磁盘列表 → 无可再上
-      upBtn.textContent = (!atRoots && !parent) ? '💽 磁盘列表' : '⬆ 上级'; // 磁盘根目录也能回到磁盘列表换磁盘
+      const atRoots = !!r.roots;                      
+      upBtn.disabled = atRoots;                       
+      upBtn.textContent = (!atRoots && !parent) ? '💽 磁盘列表' : '⬆ 上级'; 
       pathEl.textContent = atRoots ? '（磁盘列表）' : (cur || '');
       okBtn.disabled = !cur;
       const dirs = r.entries || [];
@@ -4068,31 +4266,31 @@ function fsPickDir(initPath) {
       const rowEl = e.target.closest('[data-dir]');
       if (rowEl) load(rowEl.dataset.dir);
     });
-    upBtn.onclick = () => { if (cur && parent) load(parent); else load(''); }; // 上一级；已在磁盘根目录则回到磁盘列表
+    upBtn.onclick = () => { if (cur && parent) load(parent); else load(''); }; 
     okBtn.onclick = () => { if (cur) finish(cur); };
     load(cur);
   });
 }
 
-// 桌面/网络（Windows 安装版）：运行信息、开机自启(服务)、数据目录迁移
-/* 重启平台：调用后端重启接口 → 轮询等待服务恢复 → 自动重载页面 */
+
+
 async function restartPlatform(ask = true) {
   if (ask && !await confirmBox('重启平台会短暂中断服务（数秒），期间页面无法访问；重启后数据不会丢失。是否立即重启？', { okText: '立即重启' })) return;
   const hide = loadingBox('正在重启平台…');
   let note = '';
   try { const r = await api('/api/desktop/restart', { method: 'POST', body: '{}' }); note = (r && r.note) || ''; }
-  catch (e) { /* 重启时连接被切断属正常，忽略 */ }
+  catch (e) {  }
   const back = await waitServerBack(45000);
   hide();
   if (back) { toast('平台已重启，正在重新加载…', 'ok'); setTimeout(() => location.reload(), 500); }
   else toast('已发出重启请求，但服务未在规定时间内恢复，请手动检查' + (note ? '：' + note : ''), 'err');
 }
-// 轮询 /api/health，确认服务已恢复
+
 async function waitServerBack(ms) {
-  await new Promise(r => setTimeout(r, 2200)); // 先等旧进程退出，避免刚发出重启就探测到旧实例
+  await new Promise(r => setTimeout(r, 2200)); 
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
-    try { const r = await fetch('/api/health', { cache: 'no-store' }); if (r.ok) return true; } catch { /* 未就绪 */ }
+    try { const r = await fetch('/api/health', { cache: 'no-store' }); if (r.ok) return true; } catch {  }
     await new Promise(r => setTimeout(r, 900));
   }
   return false;
@@ -4110,7 +4308,7 @@ function desktopBody(body) {
     }
     const desktop = !!info.desktop;
     const on = !!(info.autostart && info.autostart.enabled);
-    // 数据目录来源：instance=本实例专属设置（优先于环境变量）；env=环境变量；config=运行配置；default=默认位置
+    
     const SRC_NAME = { instance: '本实例专属设置（优先于环境变量 THM_DATA）', env: '环境变量 THM_DATA（多实例 / 测试）', config: '运行配置 runtime.config.json', default: '默认位置' };
     const srcName = SRC_NAME[info.data_dir_source] || '运行配置 / 默认位置';
     const canMigrate = info.can_migrate !== false;
@@ -4203,7 +4401,7 @@ function desktopBody(body) {
         if (dir) { const inp = $('#ds-dir', body); inp.value = dir; inp.focus(); toast('已选择目录，可点「保存并迁移」'); }
       } catch (e) { if (!/取消/i.test(e.message)) toast(e.message, 'err'); }
     };
-    // 环境变量启动的实例：清除本实例专属设置，回落到环境变量指定的目录
+    
     const rv = $('#ds-revert', body);
     if (rv) rv.onclick = async () => {
       if (!await confirmBox(`清除本实例专属数据目录设置，恢复为环境变量指定的目录（${info.env_data_dir || ''}）？重启本实例后生效；原目录数据不会被删除。`, { okText: '恢复', danger: true })) return;
@@ -4219,9 +4417,9 @@ function desktopBody(body) {
 }
 function mailBody(body) {
   const a = state.auth || {};
-  const isAdminLogged = a.mode === 'login' ? !!(a.current && a.current.role === 'admin') : true; // 开放模式视为主机管理员
+  const isAdminLogged = a.mode === 'login' ? !!(a.current && a.current.role === 'admin') : true; 
   const cfg = { enable: '0', host: '', port: '465', secure: '1', user: '', pass: '', from: '', to: '', remind_enable: false, remind_hour: 9, remind_interval: 1, due_enable: false, due_leads: '90,30,15,7,3,1', tpl: null, tpl_default: null };
-  const TR = { schedule: '定时', boot: '启动补发', due: '档位', manual: '手动' };
+  const TR = { schedule: '定时', boot: '启动补发', due: '档位', manual: '手动', resend: '手工补发' };
   const ST = { sent: ['green', '已发送'], empty: ['blue', '已检查·无内容'], failed: ['red', '发送失败'] };
   const paintLogs = async () => {
     const box = $('#ml-logbox', body); if (!box) return;
@@ -4239,7 +4437,7 @@ function mailBody(body) {
         <td><span class="badge ${(ST[l.status] || ['gray', ''])[0]}">${(ST[l.status] || ['gray', l.status])[1]}</span></td>
         <td class="num">${l.items || '—'}</td><td class="muted">${esc(l.msg || '')}</td></tr>`).join('')
         || '<tr><td colspan="6"><div class="empty"><div class="big">📭</div>暂无发送记录。定时 / 启动补发 / 手动发送与漏发检查都会在此数据库留档。</div></td></tr>'}</tbody></table>
-      <div class="hint" style="margin-top:6px">每天执行时刻自动检查并<b>在数据库留档</b>；“周期提醒”按间隔到期发送汇总（含 90 天内临期/过期/借用超期），触发方式显示为 定时/启动补发；“档位提醒”对每件到期物按其提前档位各提醒一次，触发方式显示为 档位。服务器启动时读取记录，已过执行时刻仍无对应记录才补发并留档；未到点或已发则不补。红色“漏发”= 应提醒当天却无记录；灰色“未到期”= 不在间隔应发日。</div>`;
+      <div class="hint" style="margin-top:6px">每天执行时刻自动检查并<b>在数据库留档</b>；“周期提醒”按间隔到期发送汇总（含 90 天内临期/过期/借用超期），触发方式显示为 定时/启动补发；“档位提醒”对每件到期物按其提前档位各提醒一次，触发方式显示为 档位。服务器启动时读取记录，已过执行时刻仍无对应记录才补发并留档；未到点或已发则不补。红色“漏发”= 应提醒当天却无记录（若已用手工补发会显示“已手工补发”）；灰色“未到期”= 不在间隔应发日。</div>`;
   };
   const save = async () => {
     try {
@@ -4317,12 +4515,41 @@ function mailBody(body) {
       </div>
       ${isAdminLogged ? '' : '<div class="hint" style="margin-top:8px;color:#d95459">🔒 发送邮件需管理员账号登录。</div>'}
       <div class="hint" style="margin-top:8px">常见：QQ邮箱 smtp.qq.com:465（授权码）；163 smtp.163.com:465；企业邮箱一般为 smtp.<域名>:465。</div>
+      <div style="border-top:1px dashed #dfe5ec;margin:16px 0 12px"></div>
+      <h4 style="margin:0 0 4px">手工补发</h4>
+      <div class="hint" style="margin-bottom:8px">自动提醒漏发、或想补发某一天的通知时用：<b>忽略</b>“今天已发过 / 未到提醒间隔 / 未到执行时刻”，按下方勾选的类型与归属日立即发送一次。周期汇总按该日重放临期 / 过期 / 借用超期；档位提醒按该日计算剩余天数。每次补发都会在下方记录里留档（触发＝<b>手工补发</b>），且<b>不会</b>改动自动提醒的去重状态（档位提醒也不写“已提醒档位”标记）。</div>
+      <div class="row-flex" style="gap:14px;flex-wrap:wrap;align-items:center">
+        <label class="check"><input type="checkbox" id="ml-rs-remind" checked> 周期汇总（临期 / 过期 / 借用超期）</label>
+        <label class="check"><input type="checkbox" id="ml-rs-due" checked> 档位到期提醒</label>
+        <label class="field" style="width:180px"><span class="lab">归属日（补哪一天）</span><input class="input" type="date" id="ml-rs-date"></label>
+        <button class="btn sm" id="ml-rs-today">改回今天</button>
+        <button class="btn ok" id="ml-resend">🔄 手工补发</button>
+      </div>
       <div id="ml-logbox"></div>
     </div></div>`;
     $('#ml-save', body).onclick = save;
     $('#ml-test', body).onclick = () => act('/api/mail/test', '测试邮件已发送');
     $('#ml-remind', body).onclick = () => act('/api/mail/remind', '临期提醒汇总已发送');
-    // 邮件内容模板：回填 / 预览 / 恢复默认
+    
+    const rsDate = $('#ml-rs-date', body);
+    if (rsDate) rsDate.value = TODAY();
+    const rsToday = $('#ml-rs-today', body); if (rsToday) rsToday.onclick = () => { rsDate.value = TODAY(); };
+    const rsGo = $('#ml-resend', body);
+    if (rsGo) rsGo.onclick = async () => {
+      if (!isAdminLogged) return toast('需要管理员权限', 'err');
+      const kinds = [];
+      if ($('#ml-rs-remind', body).checked) kinds.push('remind');
+      if ($('#ml-rs-due', body).checked) kinds.push('due');
+      if (!kinds.length) return toast('请至少选择一种要补发的提醒', 'err');
+      const date = rsDate.value || TODAY();
+      try {
+        const hide = loadingBox('正在补发…');
+        let r; try { r = await api('/api/mail/resend', { method: 'POST', body: JSON.stringify({ kinds, date }) }); } finally { hide(); }
+        toast((r && r.message) || '已补发');
+        paintLogs();
+      } catch (e) { toast(e.message || '补发失败', 'err'); }
+    };
+    
     const T0 = Object.assign({}, cfg.tpl_default || {}, cfg.tpl || {});
     $('#ml-t-title', body).value = T0.title || '';
     $('#ml-t-intro', body).value = T0.intro || '';
@@ -4363,19 +4590,26 @@ function maintainBody(body) {
       <button class="btn" id="mn-backup">💾 备份数据库</button>
       <button class="btn" id="mn-export-all">📦 导出全部数据(包)</button>
       <button class="btn" id="mn-import-all">📥 导入全部数据(包)</button>
+      <button class="btn" id="mn-restore-db">🛠 从数据库文件恢复</button>
       <button class="btn" id="mn-seed">写入演示物资</button>
       <button class="btn danger" id="mn-reset">清空全部单据与SN</button>
     </div>
     <input type="file" id="mn-import-file" accept=".zip,application/zip,application/x-zip-compressed" style="display:none">
+    <input type="file" id="mn-restore-file" accept=".db,.sqlite,.sqlite3" style="display:none">
     <div class="hint" style="margin-top:10px">
-      数据只存在本机 data/ 目录。「导出全部数据」打包 <b>数据库（物资/单据/SN/专项台账/账号/设置）+ 自定义模板 + 品牌图片</b>，
+      数据只存在本机 data/ 目录。「导出全部数据」打包 <b>数据库（物资/单据/SN/专项台账/账号/设置）+ 自定义模板 + 品牌图片 + 版本特化配置</b>，
       重装 / 迁移后可用「导入全部数据」<b>整体还原</b>（zip 包，可自行解压查看）。<br>
       导入将<b>清空当前全部数据</b>并覆盖为数据包内容，执行前系统自动把当前库备份到 <b>data/backup/</b>；导入数据包需<b>管理员</b>，完成后需重新登录；若已开启邮件提醒，建议重启服务使定时计划生效。
     </div>
+    <div class="hint" style="margin-top:6px;color:#d95459">
+      ⚠ 请勿手工把备份的 <span class="mono">.db</span> 文件拷进 <b>data/</b> 覆盖 <span class="mono">warehouse.db</span> —— 会与数据库日志（WAL）冲突，导致系统打不开数据库。
+      要还原历史数据请用上面的 <b>「🛠 从数据库文件恢复」</b>：在事务内安全覆盖，失败自动回滚，不用停服也不会损坏数据库。
+    </div>
   </div></div>
   <div class="card" style="margin-top:14px"><div class="card-body" style="max-width:680px">
-    <h3 style="margin:0 0 6px">🕓 自动备份（定时数据库快照）</h3>
-    <div class="hint" style="margin-bottom:10px">每天定时把当前数据库以<b>一致性快照</b>（VACUUM INTO）写入 <b>data/backup/auto_*.db</b>，并按“保留天数”自动清理过期文件；误删 / 损坏时可从这里下载回滚。设置<b>即时生效</b>，无需重启服务。</div>
+    <h3 style="margin:0 0 6px">🕓 自动备份（每日完整数据包）</h3>
+    <div class="hint" style="margin-bottom:10px">每天定时把<b>完整数据包</b>（zip）写入 <b>data/backup/auto_*.zip</b> —— 内含<b>数据库一致性快照 + 自定义模板 + 品牌图片 + 版本特化配置</b>，
+      换机 / 重装 / 误删后可<b>一键还原</b>；并按“保留天数”自动清理过期文件。设置<b>即时生效</b>，无需重启服务。</div>
     <div class="row-flex" style="gap:10px;flex-wrap:wrap;align-items:flex-end">
       <label class="check" style="margin-bottom:6px"><input type="checkbox" id="ab-enable"> 启用自动备份</label>
       <label style="width:170px"><span class="lab">保留天数（自动清理更旧的）</span><input class="input num" id="ab-days" type="number" min="1" value="7"></label>
@@ -4383,7 +4617,7 @@ function maintainBody(body) {
       <button class="btn primary" id="ab-save">保存</button>
       <button class="btn" id="ab-run">立即备份一次</button>
     </div>
-    <div class="hint" style="margin-top:6px">备份文件在 <b>data/backup/</b> 目录（文件名以 <span class="mono">auto_</span> 开头）。</div>
+    <div class="hint" style="margin-top:6px">备份文件都在 <b>data/backup/</b> 目录：<span class="mono">auto_</span> 开头的是定时 / 手动备份；<span class="mono">pre_</span> 开头的是每次「导入 / 恢复」前自动留存的现场。均可下载，也可直接点「恢复」回到那一刻。</div>
     <div id="ab-files" style="margin-top:6px"></div>
   </div></div>
   <div class="card" style="margin-top:14px;border-color:rgba(217,84,89,.55)"><div class="card-body" style="max-width:680px">
@@ -4398,15 +4632,17 @@ function maintainBody(body) {
     <div class="hint" style="margin-top:8px">${isAdminLogged ? '✓ 已识别管理员：' + esc((a.current && (a.current.display_name || a.current.username)) || '') : '<span style="color:#d95459">🔒 ' + esc(lockHint) + '</span>'}</div>
   </div></div>`;
   $('#mn-backup', body).onclick = () => safeRun(() => download('/api/backup', `thingsmanager_backup_${today()}.db`));
-  // 自动备份：读取配置 / 保存 / 立即备份 / 文件列表
+  
+  const fmtSize = n => (n >= 1048576 ? (n / 1048576).toFixed(2) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
   const ab = async () => {
     let d = null; try { d = await api('/api/backup/auto'); } catch { d = null; }
     const en = $('#ab-enable', body), dn = $('#ab-days', body), hr = $('#ab-hour', body), box = $('#ab-files', body);
     if (d && en) {
       en.checked = !!d.enabled; dn.value = d.days; if (hr) hr.value = String(d.hour);
-      if (box) box.innerHTML = d.files && d.files.length
-        ? `<table class="tbl"><thead><tr><th>文件</th><th class="num">大小</th><th class="num">备份时间</th><th></th></tr></thead><tbody>${d.files.map(f => `<tr><td class="mono">${esc(f.name)}</td><td class="num">${(f.size / 1024).toFixed(0)} KB</td><td class="num muted">${esc(String(f.mtime || '').slice(0, 16).replace('T', ' '))}</td><td><button class="btn sm" data-abdl="${esc(f.name)}">下载</button></td></tr>`).join('')}</tbody></table>`
-        : '<div class="hint">还没有自动备份文件；开启后到执行时刻（或点“立即备份一次”）生成。</div>';
+      const list = (d.all_files && d.all_files.length) ? d.all_files : (d.files || []);
+      if (box) box.innerHTML = list.length
+        ? `<table class="tbl"><thead><tr><th>文件</th><th>类型</th><th class="num">大小</th><th class="num">备份时间</th><th>操作</th></tr></thead><tbody>${list.map(f => `<tr><td class="mono">${esc(f.name)}</td><td>${f.kind === 'auto' ? '<span class="badge green">定时备份</span>' : '<span class="badge gray">操作前留存</span>'}</td><td class="num">${fmtSize(f.size)}</td><td class="num muted">${esc(String(f.mtime || '').slice(0, 16).replace('T', ' '))}</td><td><button class="btn sm" data-abdl="${esc(f.name)}">下载</button> <button class="btn sm" data-abrs="${esc(f.name)}">恢复</button></td></tr>`).join('')}</tbody></table>`
+        : '<div class="hint">还没有备份文件；开启后到执行时刻（或点“立即备份一次”）生成。</div>';
     }
   };
   $('#ab-save', body).onclick = async () => {
@@ -4419,12 +4655,17 @@ function maintainBody(body) {
     try {
       const hide = loadingBox('正在备份…');
       let r; try { r = await api('/api/backup/auto/run', { method: 'POST', body: '{}' }); } finally { hide(); }
-      toast(`已备份：${r.file}`); ab();
+      toast(`已生成完整数据包：${r.file}`); ab();
     } catch (e) { toast(e.message, 'err'); }
   };
-  $('#ab-files', body).addEventListener('click', async e => { const b = e.target.closest('[data-abdl]'); if (!b) return; try { await safeRun(() => download('/api/backup/auto/file/' + encodeURIComponent(b.dataset.abdl), b.dataset.abdl)); } catch {} });
+  $('#ab-files', body).addEventListener('click', async e => {
+    const dl = e.target.closest('[data-abdl]');
+    if (dl) { try { await safeRun(() => download('/api/backup/auto/file/' + encodeURIComponent(dl.dataset.abdl), dl.dataset.abdl)); } catch {} return; }
+    const rs = e.target.closest('[data-abrs]');
+    if (rs) restoreFromServer(rs.dataset.abrs);
+  });
   ab();
-  // 演示物资：空库=写入演示；有内容=清除演示（删除演示编码物资，被引用者自动保留）
+  
   const refreshDemoState = async () => {
     try {
       const st = await api('/api/demo-state');
@@ -4454,9 +4695,9 @@ function maintainBody(body) {
   };
   refreshDemoState();
   $('#mn-reset', body).onclick = async () => { if (await confirmBox('将删除<u>全部单据与 SN 记录</u>（物资保留），不可恢复，确定？', { danger: true, okText: '清空' })) { try { await safeRun(() => api('/api/admin/reset', { method: 'POST', body: JSON.stringify({ keep_skus: true }) })); toast('已清空'); state.skus = []; allSkusCache = null; show('dashboard'); } catch {} } };
-  // 数据包：导出全部数据（zip 下载）
+  
   $('#mn-export-all', body).onclick = () => safeRun(() => download('/api/backup/export-all', `thingsmanager_full_${today().replace(/-/g, '')}.zip`));
-  // 数据包：导入全部数据（管理员 + 强确认；导入前自动备份，完成后重新登录）
+  
   const importDialog = file => {
     const { el, close } = modal({ title: '导入全部数据', small: true,
       body: `<p style="margin:2px 0 8px">将把数据包 <b>${esc(file.name)}</b> 的内容<b>整体导入</b>：<u>清空当前全部数据</u>（物资/单据/SN/台账/账号/设置），并覆盖为数据包中的状态。<br>执行前会自动把当前库备份到 <b>data/backup/</b>；导入完成后需<b>重新登录</b>；导入期间请勿操作。<b>不可撤销（可回退到自动备份）</b>。</p>`,
@@ -4479,11 +4720,50 @@ function maintainBody(body) {
   $('#mn-import-all', body).onclick = () => { if (!gate()) return; const fi = $('#mn-import-file', body); fi.value = ''; fi.click(); };
   const _mif = $('#mn-import-file', body);
   _mif.onchange = () => { const f = _mif.files && _mif.files[0]; if (f) importDialog(f); _mif.value = ''; };
+  
+
+  const afterRestore = (out, label) => {
+    const bf = (out && out.backup_file) ? `；当前数据已留存为 data/backup/${out.backup_file}` : '';
+    toast(`${label}成功：已还原 ${(out && out.restored_tables != null) ? out.restored_tables + ' 张数据表' : '数据'}${bf}`);
+    localStorage.removeItem('thm_session');
+    location.hash = '#/dashboard';
+    location.reload();
+  };
+  
+  const gateRestore = () => {
+    if (a.mode === 'login' && !isAdminLogged) { toast(lockHint, 'err'); return false; }
+    return true;
+  };
+  const confirmRestore = async what => {
+    if (!gateRestore()) return false;
+    if (!await confirmBox(`将用「${what}」的内容整体覆盖当前数据：物资 / 单据 / SN / 专项台账 / 账号 / 设置都会被替换。执行前系统会自动把当前数据留存一份到 data/backup/，可再恢复回来。`, { danger: true, okText: '下一步' })) return false;
+    return await confirmBox('再次确认：真的要覆盖当前全部数据吗？', { danger: true, okText: '确认恢复' });
+  };
+  
+  $('#mn-restore-db', body).onclick = () => { if (!gateRestore()) return; const fi = $('#mn-restore-file', body); fi.value = ''; fi.click(); };
+  const _mrf = $('#mn-restore-file', body);
+  _mrf.onchange = async () => {
+    const f = _mrf.files && _mrf.files[0]; _mrf.value = '';
+    if (!f) return;
+    if (!await confirmRestore('数据库文件 ' + f.name)) return;
+    const hide = loadingBox('正在从数据库文件恢复…');
+    try { const out = await uploadFile('/api/backup/restore-db', f); afterRestore(out, '恢复'); }
+    catch (e) { toast(e.message || '恢复失败', 'err'); }
+    finally { hide(); }
+  };
+  
+  const restoreFromServer = async name => {
+    if (!await confirmRestore('备份 ' + name)) return;
+    const hide = loadingBox('正在恢复…');
+    try { const out = await api('/api/backup/restore', { method: 'POST', body: JSON.stringify({ name }) }); afterRestore(out, '恢复'); }
+    catch (e) { toast(e.message || '恢复失败', 'err'); }
+    finally { hide(); }
+  };
   const gate = () => {
     if (!isAdminLogged) { toast(lockHint, 'err'); return false; }
     return true;
   };
-  // 一键清空所有数据：管理员 + 两次确认
+  
   $('#mn-clear', body).onclick = async () => {
     if (!gate()) return;
     if (!await confirmBox('将清空全部业务数据：物资、分类、存放位置、全部单据与流水、SN 记录、互联登记，且不可恢复。系统将回到“待开站”欢迎状态（系统设置 / 登录账号 / 自定义模板 / 品牌会保留）。是否继续？', { danger: true, okText: '下一步' })) return;
@@ -4495,7 +4775,7 @@ function maintainBody(body) {
       boot();
     } catch {}
   };
-  // 一键恢复出厂设置：管理员 + 输入确认文本
+  
   $('#mn-factory', body).onclick = async () => {
     if (!gate()) return;
     const { el, close } = modal({ title: '一键恢复出厂设置', small: true,
@@ -4515,26 +4795,26 @@ function maintainBody(body) {
   };
 }
 
-/* ============================================================
- * 元数据刷新 & 登录 & 启动
- * ============================================================ */
+
+
+
 async function refreshMeta() {
   const m = await api('/api/meta');
   state.settings = m.settings; state.templates = m.templates; state.auth = m.auth; state.interlink = m.interlink || { count: 0 };
-  state.devFlow = true; // 跨库流转已转正，恒可用
+  state.devFlow = true; 
   state.devExtauth = !!(m.dev && m.dev.extauth);
   state.devDingtalk = !!(m.dev && m.dev.dingtalk);
   state.setupDone = !!(m.setup && m.setup.done);
   state.brandLimits = m.brandLimits || {};
-  state.hasAdmin = !!(m.auth && m.auth.has_admin);   // 是否已有管理员账号（删除借用记录时决定二次确认方式）
-  state.edition = m.edition || {};   // 版本特化配置（数据目录 edition.json）
-  state.update = m.update || null;   // 版本更新状态（未配置更新源时 available:false → 不显示相关设置）
+  state.hasAdmin = !!(m.auth && m.auth.has_admin);   
+  state.edition = m.edition || {};   
+  state.update = m.update || null;   
 }
-/* ============================================================
- * 首次启用引导（全新安装分步向导）
- * 第 1 步 数据存储位置 → 第 2 步 账号模式（开放 / 账号，强调开放风险）
- * → 账号模式则第 3 步设置管理员 → 第 4 步完成（可选演示 + 迁移数据目录）
- * ============================================================ */
+
+
+
+
+
 const OB_LABEL = { welcome: '欢迎', data: '数据存储位置', mode: '账号模式', admin: '设置管理员', demo: '示例数据', finish: '完成' };
 function renderOnboarding() {
   const v = $('#view');
@@ -4684,8 +4964,8 @@ function renderOnboarding() {
 
 function showLogin() {
   const v = $('#view');
-  // 重新登录后要能“回到登录前的界面”：清掉上次的视图缓存与当前视图标记，
-  // 否则 show() 会因 curViewKey 与目标相同而早退，导致内容区停留在旧占位/登录卡片上
+  
+  
   curViewKey = null;
   VIEW_CACHE.clear();
   $$('.nav-btn[data-view]').forEach(b => b.classList.remove('active'));
@@ -4713,7 +4993,7 @@ function showLogin() {
   $('#lg-go').onclick = doLogin;
   $('#lg-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 }
-// 当前登录账号自助修改密码（验证当前密码 → 设新密码；改后其它会话失效）
+
 function changeMyPassword() {
   const { el, close } = modal({
     title: '修改密码',
@@ -4734,13 +5014,13 @@ function changeMyPassword() {
   ['cp-new', 'cp-new2'].forEach(id => { const e2 = $('#' + id, el); if (e2) e2.addEventListener('keydown', ev => { if (ev.key === 'Enter') run(); }); });
 }
 async function boot() {
-  // 移动端：汉堡按钮开合侧栏抽屉（配合 CSS 的 body.nav-open）
+  
   const _nt = $('#nav-toggle'), _nm = $('#side-mask');
   const _navSet = open => document.body.classList.toggle('nav-open', !!open);
   if (_nt) _nt.onclick = e => { e.stopPropagation(); _navSet(!document.body.classList.contains('nav-open')); };
   if (_nm) _nm.onclick = () => _navSet(false);
   window.addEventListener('resize', () => { if (window.innerWidth > 860) _navSet(false); });
-  // 桌面：整条侧栏折叠 / 展开（收成窄图标条，记忆选择）
+  
   const _sc = $('#side-collapse');
   const _applyCollapsed = v => {
     document.body.classList.toggle('side-collapsed', !!v);
@@ -4749,13 +5029,13 @@ async function boot() {
   };
   if (_sc) { _sc.onclick = () => _applyCollapsed(!document.body.classList.contains('side-collapsed')); try { _applyCollapsed(localStorage.getItem('thm_side_collapsed') === '1'); } catch {} }
   buildNav();
-  ensureUnitOptions();   // 常用单位候选（客户 / 领用部门 / 借用人 等输入框共用；失败不影响主流程）
-  bindDateGuards();      // 日期框：年份最多 4 位（见函数处说明）
+  ensureUnitOptions();   
+  bindDateGuards();      
   const lo = $('#btn-logout'), uc = $('#user-chip'), ucn = $('#uc-name');
   const showLogout = on => {
     if (uc) { uc.classList.toggle('nav-hidden', !on); if (!on) uc.classList.remove('open'); }
   };
-  // 触屏 / 移动端没有“悬停”：单击用户方块展开“退出登录”（桌面端为悬停弹出）
+  
   if (uc) {
     uc.onclick = e => { e.stopPropagation(); uc.classList.toggle('open'); };
     document.addEventListener('click', e => { if (!uc.contains(e.target)) uc.classList.remove('open'); });
@@ -4779,24 +5059,24 @@ async function boot() {
   lo.onclick = async () => { try { await api('/api/auth/logout', { method: 'POST' }); } catch {} localStorage.removeItem('thm_session'); toast('已退出'); boot(); };
   const chp = $('#btn-chpass');
   if (chp) chp.onclick = changeMyPassword;
-  // 顶栏「重启平台」（需管理员：开放模式视为主机管理员）
+  
   const rb = $('#btn-restart');
   if (rb) {
     rb.classList.toggle('nav-hidden', !currentIsAdmin());
     if (currentIsAdmin()) rb.onclick = () => restartPlatform();
   }
-  // 登录成功进入系统：若内容区仍是登录表单，先替换成“正在进入…”占位，
-  // 避免在下方异步取数(如空库判断/列表加载)完成前仍显示登录卡片，造成“卡在登录界面”的错觉
+  
+  
   if (a.mode === 'login' && a.current && document.getElementById('lg-go')) {
     const pt1 = $('#page-title'); if (pt1) pt1.textContent = '';
     const vv = $('#view'); if (vv) vv.innerHTML = `<div class="empty" style="min-height:60vh;display:grid;place-items:center"><div><div style="font-size:30px">⏳</div>正在进入系统…</div></div>`;
   }
-  // 首次启用引导：全新安装（无账号 / 无业务数据 / 未标记完成）进入分步向导
+  
   if (state.setupDone === false) { renderOnboarding(); return; }
-  // 地址栏直达：URL 带 #/页面 时直接打开对应界面（书签 / 快捷方式可直达，跳过空库欢迎）
+  
   const _r0 = readHash();
   if (_r0) { show(_r0.view, _r0.param); return; }
-  // 空库引导
+  
   try { const skus = await getSkus(true); if (!skus.length) { $('#view').innerHTML = `
     <div class="card" style="max-width:560px;margin:10vh auto">
       <div class="card-body" style="text-align:center">
@@ -4820,7 +5100,7 @@ async function boot() {
     } } catch {}
   show('dashboard');
 }
-// 互联仓库：只读总览对端物资（无任何操作）
+
 async function renderInterlink(v, param) {
   const peers = (await api('/api/peers').catch(() => [])).filter(p => p.enabled);
   if (!peers.length) {
@@ -4839,7 +5119,7 @@ async function renderInterlink(v, param) {
   let cur = peers.find(p => p.id === Number(param && param.peer)) || peers[0];
   let all = [];
   const fil = { q: '', cat: '', loc: '', unit: '' };
-  if (param && param.locate) fil.q = String(param.locate);   // 从全局搜索跳入：按物资编码定位
+  if (param && param.locate) fil.q = String(param.locate);   
   const uni = arr => [...new Set(arr.map(x => String(x == null ? '' : x).trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh'));
   const syncOpt = (selId, filKey, rowField, emptyLabel) => {
     const s = $('#il-' + selId, v); if (!s) return;
@@ -4876,7 +5156,7 @@ async function renderInterlink(v, param) {
   };
   const load = async () => {
     if (!online(cur.id)) {
-      // 【异地互备】对方离线：优先展示本地留存的上次互联快照
+      
       const snap = await api(`/api/peers/${cur.id}/snapshot`).catch(() => null);
       const info = $('#il-info', v);
       if (snap && snap.rows && snap.rows.length) {
@@ -4933,7 +5213,7 @@ async function renderInterlink(v, param) {
   <div class="hint" style="margin-top:8px">该页为对端仓库的<b>只读总览</b>（数据来自对方只读查表接口），不可新增/编辑/出入库。</div>`;
   paintChips();
   $('#il-sel', v).onchange = e => { cur = peers.find(p => p.id === Number(e.target.value)) || cur; fil.q = fil.cat = fil.loc = fil.unit = ''; const qel = $('#il-q', v); if (qel) qel.value = ''; load(); };
-  $('#il-ref', v).onclick = () => show('interlink', { peer: cur.id }, { force: true }); // 重新进入会重新探测全部对端在线状态
+  $('#il-ref', v).onclick = () => show('interlink', { peer: cur.id }, { force: true }); 
   $('#il-q', v).oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#il-q', v).value; paint(); }, 200); }; })();
   $('#il-cat', v).onchange = e => { fil.cat = e.target.value; paint(); };
   $('#il-loc', v).onchange = e => { fil.loc = e.target.value; paint(); };
@@ -4946,11 +5226,11 @@ async function renderInterlink(v, param) {
 }
 const RENDER = { dashboard: renderDashboard, io: renderIo, count: renderCount, docs: renderDocs, skus: renderSkus, categories: renderCategories, stock: renderStock, sn: renderSn, interlink: renderInterlink, instruments: renderInstruments, medicines: renderMedicines, damages: renderDamages, loans: renderLoans, office: renderOffice, flows: renderFlows, docdetail: renderDocDetail, templates: renderTemplates, settings: renderSettings };
 
-/* ============================================================
- * 专项台账：计量器具 / 药品 / 办公物资 / 物资借用
- * ============================================================ */
+
+
+
 const TODAY = () => { const d = new Date(); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
-// 距今天数：exp - today（负数=已过期，null=无效）
+
 function frontDays(exp) {
   const d = String(exp || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
@@ -4968,15 +5248,25 @@ function expCell(exp) {
 const locDispList = async () => { try { return (await api('/api/locations')).map(x => x.disp).filter(Boolean); } catch { return []; } };
 const locSel = (locs, cur) => `<select class="input"><option value="">— 未设存放位置 —</option>${locs.map(l => `<option value="${esc(l)}" ${l === cur ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
 
-/* ---- 计量器具 ---- */
+
 async function renderInstruments(v) {
   const locs = await locDispList();
   const rows = await api('/api/instruments').catch(() => []);
   const fil = { q: '', status: '' };
+  const BK = 'inst';
+  const batchActions = [
+    { key: 'seal', label: '🔒 封存', run: async ids => { await runBatch('/api/instruments/batch', { ids, action: 'seal', value: 1 }, null, '已封存'); } },
+    { key: 'unseal', label: '🔓 解封', run: async ids => { await runBatch('/api/instruments/batch', { ids, action: 'seal', value: 0 }, null, '已解封'); } },
+    { key: 'del', label: '🗑 删除所选', cls: 'danger', run: async ids => {
+        if (!await confirmBox(`删除所选 ${ids.length} 条计量器具？不可恢复。`, { danger: true, okText: '删除所选' })) return;
+        await runBatch('/api/instruments/batch', { ids, action: 'delete' }, null, '已删除');
+      } },
+  ];
   const paint = () => {
     const fq = fil.q.trim().toLowerCase();
     const list = rows.filter(r => (!fq || [r.name, r.serial_no, r.spec, r.location].some(x => String(x || '').toLowerCase().includes(fq))) && (!fil.status || r.status === fil.status));
     $('#inst-body', v).innerHTML = list.length ? list.map(r => `<tr data-id="${r.id}">
+      ${batchCell(BK, r.id)}
       <td><b>${esc(r.name)}</b></td><td class="mono">${esc(r.serial_no || '—')}</td>
       <td class="muted">${esc(r.spec || '—')}</td>
       <td>${esc(r.location || '—')}</td>
@@ -4988,7 +5278,7 @@ async function renderInstruments(v) {
         <button class="btn sm primary" data-act="renew" data-id="${r.id}" title="检定/校准后续期">续期</button>
         <button class="btn sm" data-act="seal" data-id="${r.id}">${r.status === 'sealed' ? '解封' : '封存'}</button>
         <button class="btn sm danger" data-act="del" data-id="${r.id}">删除</button></td></tr>`).join('')
-      : '<tr><td colspan="9"><div class="empty"><div class="big">📏</div>暂无计量器具，点击右上角「＋ 新增计量器具」登记。</div></td></tr>';
+      : '<tr><td colspan="10"><div class="empty"><div class="big">📏</div>暂无计量器具，点击右上角「＋ 新增计量器具」登记。</div></td></tr>';
   };
   v.innerHTML = `<div class="toolbar">
     <input class="input" id="inst-q" placeholder="搜索 名称 / 序列号 / 型号 / 存放位置" style="min-width:230px">
@@ -4997,8 +5287,10 @@ async function renderInstruments(v) {
     <button class="btn" id="inst-tpl">⬇ 导入模板</button>
     <button class="btn" id="inst-imp">⬆ 按模板导入</button>
     <button class="btn primary" id="inst-new">＋ 新增计量器具</button></div>
-    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>名称</th><th>序列号</th><th>型号</th><th>存放位置</th><th>上次检测日期</th><th>有效期至</th><th>状态</th><th>备注</th><th style="width:220px">操作</th></tr></thead><tbody id="inst-body"></tbody></table></div></div>
-    <div class="hint">到期前 90 天内首页会提示；续期时更新“上次检测日期 / 有效期至”，封存后不再参与临期提醒。型号用于区分同名称的不同设备。支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记。</div>`;
+    ${batchBar(BK, batchActions)}
+    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr>${batchHead(BK)}<th>名称</th><th>序列号</th><th>型号</th><th>存放位置</th><th>上次检测日期</th><th>有效期至</th><th>状态</th><th>备注</th><th style="width:220px">操作</th></tr></thead><tbody id="inst-body"></tbody></table></div></div>
+    <div class="hint">到期前 90 天内首页会提示；续期时更新“上次检测日期 / 有效期至”，封存后不再参与临期提醒。型号用于区分同名称的不同设备。支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记，也支持勾选多条批量封存 / 解封 / 删除。</div>`;
+  bindBatch(v, BK, batchActions);
   paint();
   $('#inst-q', v).oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#inst-q', v).value; paint(); }, 200); }; })();
   $('#inst-status', v).onchange = e => { fil.status = e.target.value; paint(); };
@@ -5052,18 +5344,26 @@ function renewModal(item, after) {
   };
 }
 
-/* ---- 药品管理 ---- */
+
 async function renderMedicines(v, param) {
   const rows = await api('/api/medicines' + (param && param.all ? '?all=1' : '')).catch(() => []);
-  const fil = { q: param && param.q ? String(param.q) : '' };   // 搜索关键词可随重绘带回来（复制/编辑/停用后仍停在原搜索结果上）
+  const fil = { q: param && param.q ? String(param.q) : '' };   
   const DOC_CN = { in: '入库', out: '出库', count: '盘库' };
-  // 条码单元格：点数字看一维码（商品条码 69 码 / 药品追溯码）
+  const medBatchActions = [
+    { key: 'off', label: '🚫 停用', run: async ids => { await runBatch('/api/medicines/batch', { ids, action: 'active', value: 0 }, () => repaint(), '已停用'); } },
+    { key: 'on', label: '✓ 启用', run: async ids => { await runBatch('/api/medicines/batch', { ids, action: 'active', value: 1 }, () => repaint(), '已启用'); } },
+    { key: 'del', label: '🗑 删除所选', cls: 'danger', run: async ids => {
+        if (!await confirmBox(`删除所选 ${ids.length} 条药品？已有出入库流水的会自动跳过（不会破坏账目）。`, { danger: true, okText: '删除所选' })) return;
+        await runBatch('/api/medicines/batch', { ids, action: 'delete' }, () => repaint(), '已删除');
+      } },
+  ];
+  
   const bcCell = (code, kind) => {
     const t = String(code || '').trim();
     if (!t) return '<td class="muted">—</td>';
     return `<td><span class="bc-link mono" data-bc="${esc(t)}" data-bc-kind="${esc(kind)}" title="点击查看一维码">${esc(t)}</span></td>`;
   };
-  // 数量列：结存 = 出入库累计 ± 手工调整（悬停看明细；手改过会标「手调」）
+  
   const stockCell = r => {
     const q = Number(r.stock_qty || 0);
     const flow = Number(r.flow_qty || 0), ini = Number(r.init_qty || 0);
@@ -5080,6 +5380,7 @@ async function renderMedicines(v, param) {
     const fq = fil.q.trim().toLowerCase();
     const list = rows.filter(r => !fq || [r.name, r.mcode, r.spec, r.unit, r.batch, r.source, r.barcode, r.code].some(x => String(x || '').toLowerCase().includes(fq)));
     $('#med-body', v).innerHTML = list.length ? list.map(r => `<tr data-id="${r.id}">
+      ${batchCell('med', r.id)}
       <td class="mono">${esc(r.mcode || '—')}</td><td><b>${esc(r.name)}</b>${r.active ? '' : ' <span class="badge gray">已停用</span>'}</td><td class="muted">${esc(r.spec || '—')}</td><td class="mono">${esc(r.batch || '—')}</td>
       <td>${esc(r.prod_date || '—')}</td><td>${expCell(r.expire_date)}</td>
       <td>${esc(r.in_date || '—')}</td><td>${esc(r.source || '—')}</td>
@@ -5088,23 +5389,26 @@ async function renderMedicines(v, param) {
       <td>${esc(r.unit || '—')}</td>
       <td class="muted">${esc(r.remark || '')}</td>
       <td style="white-space:nowrap"><button class="btn sm" data-act="copy" data-id="${r.id}" title="以本行内容新建一条（改完保存为新行，原行不变）">复制</button><button class="btn sm" data-act="edit" data-id="${r.id}">编辑</button><button class="btn sm" data-act="toggle" data-id="${r.id}" title="${r.active ? '停用后默认不在本页显示、出入库单也选不到（可随时启用）' : '启用后可重新在出入库单里选用'}">${r.active ? '停用' : '启用'}</button><button class="btn sm danger" data-act="del" data-id="${r.id}">删除</button></td></tr>`).join('')
-      : '<tr><td colspan="14"><div class="empty"><div class="big">💊</div>暂无药品，点击右上角「＋ 新增药品」登记。</div></td></tr>';
+      : '<tr><td colspan="15"><div class="empty"><div class="big">💊</div>暂无药品，点击右上角「＋ 新增药品」登记。</div></td></tr>';
   };
   v.innerHTML = `<div class="toolbar">
     <input class="input" id="med-q" placeholder="搜索 药品名称 / 物资编码 / 规格型号 / 单位 / 产品批号 / 来源 / 商品条码 / 追溯码" style="min-width:320px" value="${esc(fil.q)}">
     <label class="check"><input type="checkbox" id="med-all" ${param && param.all ? 'checked' : ''}> 显示已停用</label>
     <div class="spacer"></div>
     <button class="btn" id="med-exp" title="按当前搜索关键词与「显示已停用」导出所见范围">⬇ 导出清单</button>
+    <button class="btn" id="med-ledger" title="一键导出指定时间段内全部出入库记录">📋 出入库记录</button>
     <button class="btn" id="med-tpl">⬇ 导入模板</button>
     <button class="btn" id="med-imp">⬆ 按模板导入</button>
     <button class="btn primary" id="med-new">＋ 新增药品</button></div>
-    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>物资编码</th><th>药品名称</th><th>规格型号</th><th>产品批号</th><th>生产日期</th><th>有效期</th><th>入库日期</th><th>药品来源</th><th>商品条码</th><th>药品追溯码</th><th class="num">数量</th><th>单位</th><th>备注</th><th style="width:200px">操作</th></tr></thead><tbody id="med-body"></tbody></table></div></div>
-    <div class="hint"><b>商品条码</b>（69 码）与药品<b>追溯码</b>（使用支付宝扫描）都可以点数字看一维码，方便用扫码枪核对；一维码按 EAN-13 / CODE128 自动选择。新增时填了<b>追溯码</b>（一盒一码）数量默认 <b>1</b>，可手改。「<b>停用</b>」后的药品默认不在本页显示（勾上方「显示已停用」可看到并启用回来），出入库单里也选不到，但<b>历史单据与库存流水不受影响</b>。到期前 90 天内首页会提示；支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记。<b>数量</b>以出入库单为准（做单会自动加减），需要修正时点「编辑」直接改数量即可（记下手动调整量，悬停可看明细）。同一药品<b>不同批次请分条录入</b>——批号即识别码，出入库单的候选条目会显示批号，各批次数量独立核算。药品<b>不进入「物资管理」「库存 & 清单」「盘库」</b>；出入库请到「出入库」页按物资编码 / 药品名称搜到它（候选中标着「药品」）。</div>`;
+    ${batchBar('med', medBatchActions)}
+    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr>${batchHead('med')}<th>物资编码</th><th>药品名称</th><th>规格型号</th><th>产品批号</th><th>生产日期</th><th>有效期</th><th>入库日期</th><th>药品来源</th><th>商品条码</th><th>药品追溯码</th><th class="num">数量</th><th>单位</th><th>备注</th><th style="width:200px">操作</th></tr></thead><tbody id="med-body"></tbody></table></div></div>
+    <div class="hint"><b>商品条码</b>（69 码）与药品<b>追溯码</b>（使用支付宝扫描）都可以点数字看一维码，方便用扫码枪核对；一维码按 EAN-13 / CODE128 自动选择。新增时填了<b>追溯码</b>（一盒一码）数量默认 <b>1</b>，可手改。「<b>停用</b>」后的药品默认不在本页显示（勾上方「显示已停用」可看到并启用回来），出入库单里也选不到，但<b>历史单据与库存流水不受影响</b>。到期前 90 天内首页会提示；支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记。<b>数量</b>以出入库单为准（做单会自动加减），需要修正时点「编辑」直接改数量即可（记下手动调整量，悬停可看明细）。同一药品<b>不同批次请分条录入</b>——批号即识别码，出入库单的候选条目会显示批号，各批次数量独立核算。药品<b>默认不进入「物资管理」「库存 & 清单」「盘库」</b>（需要盘点时在「盘库」页勾选「药品」，即可按结存一并盘点）；出入库请到「出入库」页按物资编码 / 药品名称搜到它（候选中标着「药品」）。另有「📋 出入库记录」可一键导出指定时间段的药品出入库明细表。</div>`;
+  bindBatch(v, 'med', medBatchActions);
   paint();
   $('#med-q', v).oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#med-q', v).value; paint(); }, 200); }; })();
   const medAll = () => ($('#med-all', v) && $('#med-all', v).checked ? true : undefined);
   const medQ = () => { const el = $('#med-q', v); return el && el.value.trim() ? el.value.trim() : undefined; };
-  // 数据变动后重绘：清掉「默认 / 显示已停用」两种页面暂存，并保留当前搜索关键词与「显示已停用」勾选
+  
   const repaint = () => {
     VIEW_CACHE.delete(viewCacheKey('medicines', undefined));
     VIEW_CACHE.delete(viewCacheKey('medicines', { all: true }));
@@ -5120,6 +5424,7 @@ async function renderMedicines(v, param) {
   };
   $('#med-tpl', v).onclick = () => impDownloadTemplate('medicines');
   $('#med-imp', v).onclick = () => impFlow('medicines', repaint);
+  $('#med-ledger', v).onclick = () => ledgerExportDialog('med', '药品');
   $('#med-body', v).addEventListener('click', e => {
     const bc = e.target.closest('[data-bc]');
     if (bc) return barcodeModal(bc.dataset.bc, bc.dataset.bcKind);
@@ -5131,20 +5436,27 @@ async function renderMedicines(v, param) {
     else if (act === 'del') (async () => { if (await confirmBox(`删除药品「${r.name}」？不可恢复。`, { danger: true, okText: '删除' })) { try { await safeRun(() => api(`/api/medicines/${id}`, { method: 'DELETE' })); toast('已删除'); repaint(); } catch {} } })();
   });
 }
-/* 一维码弹窗：把条码数字渲染成一维码（EAN-13 商品 69 码 / CODE128 追溯码，见 static/vendor/barcode.js） */
-/* 生成一维码：按可用宽度自动选模块尺寸（2~3 像素/模块），尽量整条显示、不缩放失真 */
+
+
 function bcSvg(text, maxW) {
   if (typeof window.barcodeSVG !== 'function') return { ok: false, note: '条码组件未加载（请刷新页面）' };
   const probe = window.barcodeBits(text);
   const mod = probe.ok ? Math.max(2, Math.min(3, Math.floor((maxW || 400) / probe.bits.length))) : 2;
   return window.barcodeSVG(text, { mod, h: probe.ok && probe.bits.length > 150 ? 96 : 110 });
 }
-function barcodeZoom(r, wrapStyle) {
+
+const BC_HINT = {
+  '药品追溯码': '请使用支付宝扫码验证药品信息',
+  '商品条码': '请把扫码枪对准条码读取',
+};
+function barcodeZoom(r, wrapStyle, kind) {
   if (!r.ok) return `<div class="hint">无法生成一维码：${esc(r.note || '')}</div><div class="mono" style="font-size:16px;word-break:break-all">${esc(r.text || '')}</div>`;
   const digits = String(r.text || '').replace(/./g, (c, i) => c).trim();
+  const tip = BC_HINT[kind] || '请把扫码枪对准条码读取';
   return `<div class="bc-wrap"${wrapStyle ? ` style="${wrapStyle}"` : ''}>${r.svg}</div>
     <div class="bc-digits mono">${esc(digits)}</div>
-    <div class="hint" style="text-align:center;margin-top:2px">格式 <b>${esc(r.format)}</b>${r.note ? ' · ' + esc(r.note) : ''}<br>请把扫码枪对准条码读取（约 ${r.width}×${r.h} 像素，勿再缩小）。</div>`;
+    <div class="hint" style="text-align:center;margin-top:4px;font-size:13.5px"><b>${esc(tip)}</b></div>
+    <div class="hint" style="text-align:center;margin-top:2px;font-size:12px">格式 <b>${esc(r.format)}</b>${r.note ? ' · ' + esc(r.note) : ''} · 约 ${r.width}×${r.h} 像素，勿再缩小</div>`;
 }
 function barcodeModal(text, kind) {
   const t = String(text || '').trim();
@@ -5153,11 +5465,11 @@ function barcodeModal(text, kind) {
     foot: `<button class="btn" data-c>关闭</button><button class="btn primary" id="bc-copy">复制数字</button>` });
   $$('[data-c]', el).forEach(x => x.onclick = close);
   const r = bcSvg(t, 400);
-  $('#bc-box', el).innerHTML = barcodeZoom(r, 'text-align:center');
+  $('#bc-box', el).innerHTML = barcodeZoom(r, 'text-align:center', kind);
   $('#bc-copy', el).onclick = () => copyText(r.text || t);
 }
 function medicineModal(item, after, opts) {
-  const copy = !!(opts && opts.copy);          // 复制：带入本行内容，但保存为一条新记录
+  const copy = !!(opts && opts.copy);          
   const isNew = !item || copy;
   const { el, close } = modal({ title: copy ? '复制新增药品' : (item ? '编辑药品' : '新增药品'), small: true,
     body: `<label class="field"><span class="lab">药品名称 *</span><input class="input" id="md-name" value="${esc(item ? item.name : '')}"></label>
@@ -5179,17 +5491,17 @@ function medicineModal(item, after, opts) {
         : '<div class="hint">同一药品不同批次请分条录入（批号即识别码）。填了「药品追溯码」（一盒一码）时数量默认 <b>1</b>，可手改；初始数量也可先不填，只走出入库单。</div>'}`,
     foot: `<button class="btn" data-c>取消</button><button class="btn primary" id="md-save">保存</button>` });
   $$('[data-c]', el).forEach(x => x.onclick = close);
-  // 一维码即时预览（在弹窗内就地显示，不再叠一层弹窗）
+  
   const showBc = (inputId, kind) => {
     const t = String($(inputId, el).value || '').trim();
     const box = $('#md-bc', el);
     if (!t) { box.innerHTML = `<div class="hint" style="color:var(--warn)">请先填写${esc(kind)}</div>`; return; }
     const r = bcSvg(t, 380);
-    box.innerHTML = barcodeZoom(r, 'text-align:center');
+    box.innerHTML = barcodeZoom(r, 'text-align:center', kind);
   };
   $('#md-bar-view', el).onclick = () => showBc('#md-bar', '商品条码');
   $('#md-code-view', el).onclick = () => showBc('#md-code', '药品追溯码');
-  // 追溯码 = 一盒一码：新增时填了追溯码就把数量默认成 1（用户手动改过数量后不再干预；编辑旧记录也不动数量）
+  
   const qtyEl = $('#md-qty', el), codeEl = $('#md-code', el);
   let qtyTouched = !isNew;
   qtyEl.addEventListener('input', () => { qtyTouched = true; });
@@ -5206,23 +5518,44 @@ function medicineModal(item, after, opts) {
   };
 }
 
-/* ---- 坏件管理 damage：条目取自「物资管理」档案 ----
- * 独立台账：只登记坏件与处理进度（待处理 → 维修中 → 已修复 → 已报废），
- * 不生成单据、不影响库存与出入库流水（处置坏件请另行走出入库/盘库）。 */
-const DMG_META = { pending: ['待处理', 'orange'], repairing: ['维修中', 'cyan'], repaired: ['已修复', 'green'], scrapped: ['已报废', 'gray'] };
+
+
+
+
+const DMG_META = { pending: ['待处理', 'orange'], repairing: ['维修中', 'cyan'], repaired: ['已修复', 'green'], scrapped: ['已报废', 'gray'], disabled: ['已停用', 'gray'] };
 const DMG_FLOW = ['pending', 'repairing', 'repaired', 'scrapped'];
+const DMG_ALL = DMG_FLOW.concat(['disabled']);
+const DMG_ACT_META = {
+  repair: { t: '送修', cn: '送修办理（按借出）', ok: '送出维修', cls: 'primary' },
+  fix: { t: '已修复', cn: '修复入库（按入库）', ok: '办理入库', cls: 'ok' },
+  scrap: { t: '丢弃', cn: '丢弃报废（出库减库存）', ok: '确认报废', cls: 'danger' },
+  disable: { t: '停用', cn: '停用（只标记，不动库存）', ok: '确认停用', cls: '' },
+};
 const dmgBadge = s => { const m = DMG_META[s] || DMG_META.pending; return `<span class="badge ${m[1]}">${m[0]}</span>`; };
 const dmgNext = s => DMG_FLOW[(Math.max(0, DMG_FLOW.indexOf(s)) + 1) % DMG_FLOW.length];
 async function renderDamages(v) {
   const rows = await api('/api/damages').catch(() => []);
   const locs = await locDispList();
   const fil = { q: '', status: '' };
+  const BK = 'dmg';
+  const repaint = () => renderDamages(v);
+  const dmgBatchActions = [
+    { key: 'status', label: '↻ 改状态', run: async ids => {
+        const op = await askPick('批量设置坏件状态', DMG_ALL.map(s => ({ value: s, label: DMG_META[s][0] })), { hint: `已选 ${ids.length} 条，设为：` });
+        if (op === undefined) return; await runBatch('/api/damages/batch', { ids, action: 'status', value: op }, repaint, '已更新状态');
+      } },
+    { key: 'del', label: '🗑 删除所选', cls: 'danger', run: async ids => {
+        if (!await confirmBox(`删除所选 ${ids.length} 条坏件记录？不可恢复（不会改动库存）。`, { danger: true, okText: '删除所选' })) return;
+        await runBatch('/api/damages/batch', { ids, action: 'delete' }, repaint, '已删除');
+      } },
+  ];
   const paint = () => {
     const fq = fil.q.trim().toLowerCase();
     const list = rows.filter(r => (!fq || [r.sku_code, r.name, r.spec, r.location, r.sn, r.reason].some(x => String(x || '').toLowerCase().includes(fq)))
       && (!fil.status || r.status === fil.status));
     $('#dmg-fcnt', v).textContent = `共 ${list.length} / ${rows.length} 条`;
     $('#dmg-body', v).innerHTML = list.length ? list.map(r => `<tr data-id="${r.id}">
+      ${batchCell(BK, r.id)}
       <td class="mono">${esc(r.sku_code || '—')}</td><td><b>${esc(r.name)}</b></td>
       <td class="muted">${esc(r.spec || '—')}</td>
       <td>${esc(r.location || '—')}</td>
@@ -5231,22 +5564,27 @@ async function renderDamages(v) {
       <td>${esc(r.reason || '—')}</td>
       <td>${dmgBadge(r.status)}</td>
       <td class="muted">${esc(r.date || '—')}</td><td>${esc(r.operator || '—')}</td>
-      <td class="muted">${esc(r.remark || '')}</td>
-      <td><div class="row-act">
+      <td class="muted">${esc(r.remark || '')}${r.out_doc_no ? `<div style="font-size:12px">出库 <a class="link" data-docid="${r.out_doc_id}">${esc(r.out_doc_no)}</a></div>` : ''}${r.in_doc_no ? `<div style="font-size:12px">入库 <a class="link" data-docid="${r.in_doc_id}">${esc(r.in_doc_no)}</a></div>` : ''}${r.loan_borrower ? `<div class="muted" style="font-size:12px">送修 · ${esc(r.loan_borrower)}${r.loan_due ? ` · 应还 ${esc(r.loan_due)}` : ''}${r.loan_status === 'returned' ? '（已结清）' : ''}</div>` : ''}</td>
+      <td><div class="row-act" style="white-space:normal">
         <button class="btn sm" data-act="edit" data-id="${r.id}">编辑</button>
-        <button class="btn sm primary" data-act="next" data-id="${r.id}" title="按下一条进度推进：待处理 → 维修中 → 已修复 → 已报废 → 待处理">进度</button>
+        <button class="btn sm" data-act="do" data-do="repair" data-id="${r.id}" title="送修：按借出办理（开出库单 + 借用台账）">送修</button>
+        <button class="btn sm ok" data-act="do" data-do="fix" data-id="${r.id}" title="已修复：按入库办理（库存回补并结清送修借用）">已修复</button>
+        <button class="btn sm danger" data-act="do" data-do="scrap" data-id="${r.id}" title="丢弃：按出库报废办理（真减库存）">丢弃</button>
+        <button class="btn sm ghost" data-act="do" data-do="disable" data-id="${r.id}" title="停用：只标记不再处理，不动库存">停用</button>
         <button class="btn sm danger" data-act="del" data-id="${r.id}">删除</button></div></td></tr>`).join('')
-      : '<tr><td colspan="11"><div class="empty"><div class="big">🔧</div>暂无坏件记录，点击右上角「＋ 登记坏件」（条目取自「物资管理」档案）。</div></td></tr>';
+      : '<tr><td colspan="12"><div class="empty"><div class="big">🔧</div>暂无坏件记录，点击右上角「＋ 登记坏件」（条目取自「物资管理」档案）。</div></td></tr>';
   };
   v.innerHTML = `<div class="toolbar">
     <input class="input" id="dmg-q" placeholder="搜索 名称 / 规格 / 编码 / 库位 / SN / 原因" style="min-width:230px">
-    <select class="input" id="dmg-status" style="width:140px"><option value="">全部状态</option>${DMG_FLOW.map(s => `<option value="${s}">${DMG_META[s][0]}</option>`).join('')}</select>
+    <select class="input" id="dmg-status" style="width:140px"><option value="">全部状态</option>${DMG_ALL.map(s => `<option value="${s}">${DMG_META[s][0]}</option>`).join('')}</select>
     <button class="btn sm ghost" id="dmg-fclear">重置筛选</button>
     <span class="tag muted" id="dmg-fcnt"></span>
     <div class="spacer"></div>
     <button class="btn primary" id="dmg-new">＋ 登记坏件</button></div>
-    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>物资编码</th><th>物资名称</th><th>规格</th><th>存放位置</th><th class="num">数量</th><th>序列号 / SN</th><th>坏件原因</th><th>状态</th><th>登记日期</th><th>经办人</th><th>备注</th><th style="width:200px">操作</th></tr></thead><tbody id="dmg-body"></tbody></table></div></div>
-    <div class="hint">坏件台账<b>条目取自「物资管理」档案</b>（名称 / 规格 / 单位 / 库位自动带出）；本页只登记坏件与处理进度，<b>不影响库存与出入库流水</b>。处置（报废出库 / 修复入库）请到「出入库」页正常开单，或用「盘库」核对实物。</div>`;
+    ${batchBar(BK, dmgBatchActions)}
+    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr>${batchHead(BK)}<th>物资编码</th><th>物资名称</th><th>规格</th><th>存放位置</th><th class="num">数量</th><th>序列号 / SN</th><th>坏件原因</th><th>状态</th><th>登记日期</th><th>经办人</th><th>备注 / 单据</th><th style="width:380px">操作</th></tr></thead><tbody id="dmg-body"></tbody></table></div></div>
+    <div class="hint">坏件台账<b>条目取自「物资管理」档案</b>（名称 / 规格 / 单位 / 库位自动带出）。处置按真实单据办理：<b>送修 = 借出</b>（开出库单 + 借用台账，可在「物资借用」页跟进）、<b>已修复 = 入库</b>（库存回补并结清借用）、<b>丢弃 = 出库报废</b>（真减库存）、<b>停用 = 只标记不再处理</b>（不动库存）。处置产生的单号会显示在备注下方，可点开看单据；勾选多条可批量改状态 / 删除。</div>`;
+  bindBatch(v, BK, dmgBatchActions);
   paint();
   $('#dmg-q', v).oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#dmg-q', v).value; paint(); }, 200); }; })();
   $('#dmg-status', v).onchange = e => { fil.status = e.target.value; paint(); };
@@ -5256,12 +5594,66 @@ async function renderDamages(v) {
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const id = Number(b.dataset.id); const act = b.dataset.act; const r = rows.find(x => x.id === id);
     if (act === 'edit') damageModal(r, locs, () => renderDamages(v));
+    else if (act === 'do') damageActModal(r, b.dataset.do, () => renderDamages(v));
     else if (act === 'next') (async () => {
       const to = dmgNext(r.status);
       try { await safeRun(() => api(`/api/damages/${id}`, { method: 'PUT', body: JSON.stringify({ status: to }) })); toast(`「${r.name}」已标记为 ${DMG_META[to][0]}`); renderDamages(v); } catch {}
     })();
     else if (act === 'del') (async () => { if (await confirmBox(`删除坏件记录「${r.name}」？不可恢复（不会改动库存）。`, { danger: true, okText: '删除' })) { try { await safeRun(() => api(`/api/damages/${id}`, { method: 'DELETE' })); toast('已删除'); renderDamages(v); } catch {} } })();
   });
+}
+
+
+function damageActModal(r, action, after) {
+  const A = DMG_ACT_META[action] || DMG_ACT_META.repair;
+  const snOn = !!(r.sn && String(r.sn).trim());
+  const tips = {
+    repair: '按<b>借出</b>办理：生成一张出库单，同时在「物资借用」生成借出记录（借用人 = 维修方），可填应还日并享受超期提醒。送修期间库存已减，修复后用「已修复」入库回补。',
+    fix: '按<b>入库</b>办理：生成入库单把数量（SN）收回来，并结清送修产生的借用记录。',
+    scrap: '按<b>出库报废</b>办理：生成出库单真实扣减库存。库存不足会被拦下（可先核对数量或先办理入库）。',
+    disable: '只把这条坏件记录标记为<b>已停用</b>（不再处理），不动库存、不生成单据。',
+  }[action] || '';
+  const { el, close } = modal({ title: `${A.cn} · ${r.name}`, small: true,
+    body: `<div class="hint" style="margin-bottom:8px">${tips}</div>
+      <div class="row-flex" style="gap:10px;flex-wrap:wrap">
+        <label style="width:110px"><span class="lab">数量</span><input class="input num" type="number" min="1" id="da-qty" value="${Number(r.qty) || 1}"${action === 'disable' ? ' disabled' : ''}></label>
+        <label style="width:160px"><span class="lab">经办人</span><input class="input" id="da-op" value="${esc(state.settings.default_operator || r.operator || '')}"></label>
+        <label style="width:170px"><span class="lab">日期</span><input class="input" type="date" id="da-date" value="${TODAY()}"></label>
+      </div>
+      ${action === 'repair' ? `<div class="row-flex" style="gap:10px;flex-wrap:wrap;margin-top:6px">
+        <label class="grow" style="min-width:180px"><span class="lab">维修方 *（借用人）</span><input class="input" id="da-party" placeholder="如 某某维修部 / 送修厂商"></label>
+        <label style="width:150px"><span class="lab">应还日</span><input class="input" type="date" id="da-due"></label>
+        <label style="width:130px"><span class="lab">联系方式</span><input class="input" id="da-contact"></label></div>` : ''}
+      ${action !== 'disable' ? `<label class="field" style="margin-top:6px"><span class="lab">序列号 / SN${snOn ? '（已带出坏件登记的 SN）' : '（SN 管理物资必填）'}</span><input class="input mono" id="da-sn" value="${esc(r.sn || '')}"></label>` : ''}
+      <label class="field"><span class="lab">备注</span><input class="input" id="da-rmk" placeholder="可留空"></label>
+      <div class="hint">档案：单位 ${esc(r.unit || '—')} · 库位 ${esc(r.location || '—')} · 物资编码 <b>${esc(r.sku_code || '—')}</b>${r.sku_id ? '' : '<br><b style="color:var(--warn)">该记录未关联物资档案，无法办理出入库：请先「编辑」选择物资。</b>'}</div>`,
+    foot: `<button class="btn" data-c>取消</button><button class="btn ${A.cls}" id="da-go">${A.ok}</button>` });
+  $$('[data-c]', el).forEach(x => x.onclick = close);
+  $('#da-go', el).onclick = async () => {
+    const body = {
+      action,
+      qty: Number($('#da-qty', el).value) || Number(r.qty) || 1,
+      operator: $('#da-op', el).value.trim(),
+      date: $('#da-date', el).value,
+      remark: $('#da-rmk', el).value.trim(),
+    };
+    if (action === 'repair') {
+      body.party = $('#da-party', el).value.trim();
+      if (!body.party) return toast('请填写维修方（送修按借出办理）', 'err');
+      body.due_date = $('#da-due', el).value;
+      body.contact = $('#da-contact', el).value.trim();
+    }
+    if (action !== 'disable') body.sn = $('#da-sn', el).value.trim();
+    if (action === 'disable' && !await confirmBox(`把「${r.name}」标记为已停用（不再处理）？不会改动库存与单据。`, { okText: '确认停用' })) return;
+    if (action === 'scrap' && !await confirmBox(`按出库报废办理「${r.name}」：会真实扣减库存 ${body.qty} ${r.unit || ''}，是否继续？`, { danger: true, okText: '确认报废' })) return;
+    try {
+      const hide = loadingBox('正在办理…');
+      let out; try { out = await api(`/api/damages/${r.id}/act`, { method: 'POST', body: JSON.stringify(body) }); } finally { hide(); }
+      close();
+      toast(out && out.message ? out.message : '已办理');
+      after && after();
+    } catch (e) { toast(e.message, 'err'); }
+  };
 }
 async function damageModal(item, locs, after) {
   let skus = []; try { skus = await getSkus(true); } catch {}
@@ -5320,39 +5712,72 @@ async function damageModal(item, locs, after) {
   };
 }
 
-/* ---- 办公物资（独立台账，比照物资管理）---- */
+
 async function renderOffice(v, param) {
   const rows = await api('/api/office' + (param && param.all ? '?all=1' : '')).catch(() => []);
   let cats = []; try { cats = await api('/api/categories'); } catch {}
   const locs = await locDispList();
   const fil = { q: '', cat: '' };
+  const BK = 'off';
+  const repaint = () => renderOffice(v, { all: $('#off-all', v) && $('#off-all', v).checked ? true : undefined, q: undefined });
+  const offBatchActions = [
+    { key: 'category', label: '🏷 设置类别', run: async ids => {
+        const op = await askPick('批量设置类别', cats.map(c => ({ value: c.id, label: c.name })),
+          { emptyLabel: '— 归到「办公物资」分类 —', hint: `已选 ${ids.length} 条办公物资，设置为：` });
+        if (op === undefined) return; await runBatch('/api/office/batch', { ids, action: 'category', value: op }, repaint, '已设置类别');
+      } },
+    { key: 'location', label: '📍 设置存放位置', run: async ids => {
+        const op = await askPick('批量设置存放位置', (await locPickOptions()).map(l => ({ value: l.label, label: l.label })), { emptyLabel: '— 清空存放位置 —', hint: `已选 ${ids.length} 条，设置为：` });
+        if (op === undefined) return; await runBatch('/api/office/batch', { ids, action: 'location', value: op }, repaint, '已设置存放位置');
+      } },
+    { key: 'off', label: '🚫 停用', run: async ids => { await runBatch('/api/office/batch', { ids, action: 'active', value: 0 }, repaint, '已停用'); } },
+    { key: 'on', label: '✓ 启用', run: async ids => { await runBatch('/api/office/batch', { ids, action: 'active', value: 1 }, repaint, '已启用'); } },
+    { key: 'del', label: '🗑 删除所选', cls: 'danger', run: async ids => {
+        if (!await confirmBox(`删除所选 ${ids.length} 条办公物资？已有出入库流水的会自动跳过（不会破坏账目）。`, { danger: true, okText: '删除所选' })) return;
+        await runBatch('/api/office/batch', { ids, action: 'delete' }, repaint, '已删除');
+      } },
+  ];
+  
+  const offQtyCell = r => {
+    const q = Number(r.stock_qty || 0);
+    const flow = Number(r.flow_qty || 0), ini = Number(r.init_qty || 0);
+    const l = r.last_doc || {};
+    const tip = [r.io_docs ? `出入库合计 ${flow > 0 ? '+' : ''}${flow}（${r.io_docs} 单）` : '尚无出入库记录', ini ? `手工调整 ${ini > 0 ? '+' : ''}${ini}` : '',
+      r.io_docs ? `最近一次：${l.type === 'in' ? '入库' : '出库'} ${String(l.doc_at || '').slice(0, 16)} · ${l.doc_no || ''}` : ''].filter(Boolean).join('；');
+    if (!r.io_docs && !ini) return `<span class="muted" title="${esc(tip)}">—</span>`;
+    return `<b title="${esc(tip)}">${q}</b>${r.io_docs ? ` <span class="muted" style="font-size:11px" title="${esc(tip)}">（${r.io_docs} 单）</span>` : ''}${ini ? ` <span class="tag" style="font-size:10px" title="${esc(tip)}">手调</span>` : ''}`;
+  };
   const paint = () => {
     const fq = fil.q.trim().toLowerCase();
     const list = rows.filter(r => (!fq || [r.code, r.name, r.spec].some(x => String(x || '').toLowerCase().includes(fq))) && (!fil.cat || r.category_name === fil.cat));
     $('#off-fcnt', v).textContent = `共 ${list.length} / ${rows.length} 条`;
     $('#off-body', v).innerHTML = list.length ? list.map(r => `<tr data-id="${r.id}">
+      ${batchCell(BK, r.id)}
       <td class="mono">${esc(r.code || '—')}</td><td><b>${esc(r.name)}</b></td><td class="muted">${esc(r.spec || '—')}</td>
       <td>${r.category_name ? `<span class="badge blue">${esc(r.category_name)}</span>` : '—'}</td>
-      <td>${esc(r.unit || '—')}</td><td class="num">${r.qty}</td><td>${esc(r.location || '—')}</td>
+      <td>${esc(r.unit || '—')}</td><td class="num">${offQtyCell(r)}</td><td>${esc(r.location || '—')}</td>
       <td>${r.status ? '<span class="badge green">启用</span>' : '<span class="badge gray">停用</span>'}</td>
       <td style="white-space:nowrap">
         <button class="btn sm" data-act="edit" data-id="${r.id}">编辑</button>
         <button class="btn sm" data-act="toggle" data-id="${r.id}">${r.status ? '停用' : '启用'}</button>
         <button class="btn sm danger" data-act="del" data-id="${r.id}">删除</button></td></tr>`).join('')
-      : '<tr><td colspan="9"><div class="empty"><div class="big">🖨️</div>暂无办公物资，点击右上角「＋ 新增办公物资」。</div></td></tr>';
+      : '<tr><td colspan="10"><div class="empty"><div class="big">🖨️</div>暂无办公物资，点击右上角「＋ 新增办公物资」。</div></td></tr>';
   };
   v.innerHTML = `<div class="toolbar">
     <input class="input" id="off-q" placeholder="搜索 编码 / 名称 / 型号" style="min-width:230px">
     <label class="check"><input type="checkbox" id="off-all" ${param && param.all ? 'checked' : ''}> 显示已停用</label>
     <div class="spacer"></div>
+    <button class="btn" id="off-ledger" title="一键导出指定时间段内全部出入库记录">📋 出入库记录</button>
     <button class="btn" id="off-tpl">⬇ 导入模板</button>
     <button class="btn" id="off-imp">⬆ 按模板导入</button>
     <button class="btn primary" id="off-new">＋ 新增办公物资</button></div>
     <div class="toolbar" style="margin-top:6px"><span class="tag">高级筛选</span>
     <select class="input" id="off-cat" style="min-width:150px"><option value="">全部类别</option>${cats.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('')}</select>
     <button class="btn sm ghost" id="off-fclear">重置筛选</button><span class="tag muted" id="off-fcnt"></span></div>
-    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>编码</th><th>名称</th><th>型号</th><th>类别</th><th>单位</th><th class="num">数量</th><th>存放位置</th><th>状态</th><th style="width:210px">操作</th></tr></thead><tbody id="off-body"></tbody></table></div></div>
-    <div class="hint">办公物资为独立台账（不参与出入库与库存流水），用于日常办公用品登记。支持「⬇ 导入模板 / ⬆ 按模板导入」批量登记。</div>`;
+    ${batchBar(BK, offBatchActions)}
+    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr>${batchHead(BK)}<th>编码</th><th>名称</th><th>型号</th><th>类别</th><th>单位</th><th class="num">数量</th><th>存放位置</th><th>状态</th><th style="width:210px">操作</th></tr></thead><tbody id="off-body"></tbody></table></div></div>
+    <div class="hint">办公物资是独立台账（<b>默认不进「物资管理」「库存 & 清单」「盘库」</b>，需要盘点时在「盘库」页勾选「办公物资」），新增时若未选类别会自动归到<b>「办公物资」分类</b>；<b>可在「出入库」页对办公物资做库存操作</b>——按编码 / 名称搜到它即可（候选中标着「办公物资」），数量 = 出入库流水 ± 手工调整（需要修正时点「编辑」直接改数量）。支持「⬇ 导入模板 / ⬆ 按模板导入」、勾选多条批量设置类别 / 存放位置 / 停用启用 / 删除，以及「📋 出入库记录」一键导出指定时间段的明细表。</div>`;
+  bindBatch(v, BK, offBatchActions);
   paint();
   $('#off-q', v).oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(() => { fil.q = $('#off-q', v).value; paint(); }, 200); }; })();
   $('#off-cat', v).onchange = e => { fil.cat = e.target.value; paint(); };
@@ -5361,6 +5786,7 @@ async function renderOffice(v, param) {
   $('#off-new', v).onclick = () => officeModal(null, cats, locs, () => renderOffice(v, { all: $('#off-all', v).checked ? true : undefined }));
   $('#off-tpl', v).onclick = () => impDownloadTemplate('office');
   $('#off-imp', v).onclick = () => impFlow('office', () => renderOffice(v, { all: $('#off-all', v).checked ? true : undefined }));
+  $('#off-ledger', v).onclick = () => ledgerExportDialog('off', '办公物资');
   $('#off-body', v).addEventListener('click', e => {
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const id = Number(b.dataset.id); const act = b.dataset.act; const r = rows.find(x => x.id === id);
@@ -5370,15 +5796,19 @@ async function renderOffice(v, param) {
   });
 }
 function officeModal(item, cats, locs, after) {
+  
+  const defCat = item ? null : (cats.find(c => c.name === '办公物资') || {}).id;
   const { el, close } = modal({ title: item ? '编辑办公物资' : '新增办公物资', small: true,
     body: `<label class="field"><span class="lab">名称 *</span><input class="input" id="of-name" value="${esc(item ? item.name : '')}"></label>
       <div class="split"><label class="field"><span class="lab">编码</span><input class="input mono" id="of-code" value="${esc(item ? item.code : '')}" placeholder="如 BG-001"></label>
       <label class="field"><span class="lab">型号</span><input class="input" id="of-spec" value="${esc(item ? item.spec : '')}"></label></div>
-      <div class="split"><label class="field"><span class="lab">类别</span><select class="input" id="of-cat"><option value="">— 未设类别 —</option>${cats.map(c => `<option value="${c.id}" ${item && item.category_id == c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
-      <label class="field"><span class="lab">单位</span><input class="input" id="of-unit" value="${esc(item ? item.unit : '')}" placeholder="个/盒/包"></label></div>
-      <div class="split"><label class="field"><span class="lab">数量</span><input class="input num" type="number" min="0" id="of-qty" value="${item ? item.qty : 0}"></label>
+      <div class="split"><label class="field"><span class="lab">类别</span><select class="input" id="of-cat"><option value="">— 归到「办公物资」分类 —</option>${cats.map(c => `<option value="${c.id}" ${(item && item.category_id == c.id) || (!item && defCat == c.id) ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+      <label class="field"><span class="lab">单位</span><input class="input" id="of-unit" list="unit-list" value="${esc(item ? item.unit : '')}" placeholder="个/盒/包"></label></div>
+      <div class="split"><label class="field"><span class="lab">数量${item ? '（可手改）' : '（初始）'}</span><input class="input num" type="number" min="0" id="of-qty" value="${item ? Number(item.stock_qty || 0) : 0}"></label>
       <label class="field"><span class="lab">存放位置</span><select class="input" id="of-loc"><option value="">— 未设存放位置 —</option>${locs.map(l => `<option value="${esc(l)}" ${(item ? item.location : '') === l ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></div>
-      <label class="field"><span class="lab">备注</span><input class="input" id="of-rmk" value="${esc(item ? item.remark : '')}"></label>`,
+      <label class="field"><span class="lab">备注</span><input class="input" id="of-rmk" value="${esc(item ? item.remark : '')}"></label>
+      ${item ? `<div class="hint">当前数量 ${Number(item.stock_qty || 0)} = 出入库合计 ${Number(item.flow_qty || 0) > 0 ? '+' : ''}${Number(item.flow_qty || 0)}${Number(item.init_qty || 0) ? ` ± 手工调整 ${Number(item.init_qty || 0) > 0 ? '+' : ''}${Number(item.init_qty || 0)}` : ''}。直接改上面的数量即以该值为准（出入库会继续在上面加减）。</div>`
+        : '<div class="hint">办公物资可像普通物资一样在「出入库」页做进出（按编码 / 名称搜到它）；这里的初始数量相当于期初库存，也可以留 0 只走出入库单。</div>'}`,
     foot: `<button class="btn" data-c>取消</button><button class="btn primary" id="of-save">保存</button>` });
   $$('[data-c]', el).forEach(x => x.onclick = close);
   $('#of-save', el).onclick = async () => {
@@ -5392,14 +5822,14 @@ function officeModal(item, cats, locs, after) {
   };
 }
 
-/* ---- 物资借用 ---- */
+
 function loanKindBadge(kind) { return `<span class="badge ${kind === 'borrow' ? 'kborrow' : 'klend'}">${kind === 'borrow' ? '借入' : '借出'}</span>`; }
 async function renderLoans(v) {
   const rows = await api('/api/loans').catch(() => []);
   const fil = { status: '', kind: '', q: '' };
   const paint = () => {
     const fq = fil.q.trim().toLowerCase();
-    const list = rows.filter(r => (!fil.status || r.status === fil.status) && (!fil.kind || r.kind === fil.kind) && (!fq || [r.borrower, r.sku_code, r.name].some(x => String(x || '').toLowerCase().includes(fq)))).sort(loanDueSort); // 在借按 到期日=0/超期+N/未到期−N 降序
+    const list = rows.filter(r => (!fil.status || r.status === fil.status) && (!fil.kind || r.kind === fil.kind) && (!fq || [r.borrower, r.sku_code, r.name].some(x => String(x || '').toLowerCase().includes(fq)))).sort(loanDueSort); 
     $('#loan-body', v).innerHTML = list.length ? list.map(r => {
       const isBorrow = r.kind === 'borrow';
       const issue = isBorrow ? { lab: '借入·入库单', no: r.in_doc_no, id: r.doc_in_id } : { lab: '借出·出库单', no: r.out_doc_no, id: r.doc_out_id };
@@ -5451,13 +5881,13 @@ async function renderLoans(v) {
     else if (act === 'doc') viewDoc(id);
   });
 }
-// 删除借用记录（危险操作）：需管理员密码确认；可勾选“同时撤回关联单据（回退库存）”
+
 function loanDeleteModal(loan, after) {
   const isBorrow = loan.kind === 'borrow';
   const docIds = [loan.doc_out_id, loan.doc_in_id].map(Number).filter(Boolean);
   const issue = isBorrow ? { lab: '借入·入库单', no: loan.in_doc_no } : { lab: '借出·出库单', no: loan.out_doc_no };
   const closeD = isBorrow ? { lab: '归还·出库单', no: loan.out_doc_no } : { lab: '还入·入库单', no: loan.in_doc_no };
-  const needPwd = !!state.hasAdmin;   // 本机有管理员账号 → 校验密码；纯开放模式无账号 → 改为要求确认文字
+  const needPwd = !!state.hasAdmin;   
   const { el, close } = modal({ title: '删除借用记录', small: true,
     body: `<div class="hint" style="margin-bottom:8px">将<b>删除</b>这条${isBorrow ? '借入' : '借出'}台账记录：<b>${esc(loan.name)}</b> × ${loan.qty} ${esc(loan.unit || '')}（对方 ${esc(loan.borrower || '—')}，${esc(loan.loan_date || '')}）。</div>
       <div class="hint" style="border:1px solid rgba(239,68,68,.35);background:rgba(239,68,68,.07);border-radius:8px;padding:8px 10px;margin-bottom:10px">
@@ -5488,7 +5918,7 @@ function loanDeleteModal(loan, after) {
     } catch (e) { toast(e.message, 'err'); }
   };
 }
-// 办理借出 / 借入：借出(lend)=出库单（需在库 SN / 库存）；借入(borrow)=入库单（他方 SN）
+
 async function loanBorrowModal(after) {
   let skus = []; try { skus = await getSkus(true); } catch {}
   const lines = [{ sku_id: '', qty: '', snText: '' }];
@@ -5528,7 +5958,7 @@ async function loanBorrowModal(after) {
           : `<div style="width:130px"><span class="lab">数量</span><input class="input num" type="number" min="1" data-f="qty" value="${esc(l.qty)}"></div>`}
           <button class="btn ghost" data-act="del" style="margin-top:16px">✕</button>
         </div></div>`; }).join('') || '<div class="muted">（空）</div>';
-    // 明细行的物资下拉加上搜索框（物资多时快速定位；重绘后恢复该行输入的关键词）
+    
     $$('#lb-lines .line-item', el).forEach(rowEl => {
       const i = Number(rowEl.dataset.i);
       const sel = rowEl.querySelector('[data-f=sku]');
@@ -5586,8 +6016,8 @@ async function loanBorrowModal(after) {
     } catch (e2) { toast(e2.message, 'err'); }
   };
 }
-// 在借记录“修改信息”：应还日 / 借期 / 联系方式 / 借用人 / 借用日期 / 备注
-// 借用人、借用日期、备注 会由服务端同步修正到关联的开立单据（只改文字与日期，不动库存与数量）
+
+
 function loanEditModal(loan, after) {
   const isBorrow = loan.kind === 'borrow';
   const effDue = loan.eff_due || loan.due_date || '';
@@ -5627,7 +6057,7 @@ function loanEditModal(loan, after) {
     } catch (e) { toast(e.message, 'err'); }
   };
 }
-// 归还：借出结清=还入本库(入库单)；借入结清=归还他方(出库单)
+
 async function loanReturn(loan, after) {
   const isBorrow = loan.kind === 'borrow';
   const { el, close } = modal({ title: isBorrow ? '归还他方（借入结清）' : '还入本库（借出结清）', small: true,
@@ -5649,7 +6079,7 @@ async function loanReturn(loan, after) {
 }
 
 document.addEventListener('click', e => { const t = e.target.closest('.nav-btn[data-view]'); if (t && !e.defaultPrevented) { show(t.dataset.view); document.body.classList.remove('nav-open'); } });
-// 全局：点击任意带单据编号/单据的元素（[data-docid]）弹出该单据详情（含“打开单据详情界面”）
+
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-docid]');
   if (!t || t.tagName === 'SELECT' || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return;
@@ -5658,18 +6088,18 @@ document.addEventListener('click', e => {
   e.preventDefault(); e.stopPropagation();
   viewDoc(id);
 });
-/* ============================================================
- * 全局搜索（本机各模块 + 互联仓库）
- * ============================================================ */
-/* 全局搜索跳转后的定位高亮：目标条目高亮闪烁 3 秒（6 次 × 0.5s，见 app.css 的 .hit-flash）
- * 列表是异步渲染的，所以这里带重试（最多 ~1.8s），拿到元素后再滚动到视线中间 */
+
+
+
+
+
 async function flashHit(sel, tries = 12) {
   for (let i = 0; i < tries; i++) {
     const el = document.querySelector(sel);
     if (el) {
       try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { try { el.scrollIntoView(); } catch {} }
       el.classList.remove('hit-flash');
-      void el.offsetWidth;                 // 重排一下，保证连续两次点击都能重放动画
+      void el.offsetWidth;                 
       el.classList.add('hit-flash');
       setTimeout(() => el.classList.remove('hit-flash'), 3600);
       return true;
@@ -5681,8 +6111,8 @@ async function flashHit(sel, tries = 12) {
 function runGlobalSearch() {
   const inp = $('#global-q'); if (!inp) return;
   const q = inp.value.trim(); if (!q) return;
-  // 点击结果：跳到对应页面 + 把那一条高亮闪烁 3 秒
-  // locate：先按该关键字筛出目标（单据流水是分页的、SN 列表可能很长），保证目标行一定在列表里
+  
+  
   const GROUPS = {
     skus: { view: 'skus', all: true, sel: id => `#sku-tbody tr[data-id="${id}"]` },
     sn: { view: 'sn', locate: r => r.code, sel: id => `#sn-body tr[data-id="${id}"]` },
@@ -5718,7 +6148,7 @@ function runGlobalSearch() {
     b.querySelectorAll('.gs-item').forEach(it => {
       it.onclick = async () => {
         const key = it.dataset.key;
-        if (key === '__peer') {              // 互联仓库：切到该对端并定位到那一条物资
+        if (key === '__peer') {              
           const code = String(it.dataset.code || '');
           close();
           await show('interlink', { peer: Number(it.dataset.peer), locate: code }, { force: true });
@@ -5731,7 +6161,7 @@ function runGlobalSearch() {
         close();
         await show(meta.view, Object.keys(param).length ? param : undefined, { force: true });
         if (await flashHit(meta.sel(id))) return;
-        if (meta.all) { await show(meta.view, { all: true }, { force: true }); await flashHit(meta.sel(id)); }  // 停用条目默认不显示：放宽一次
+        if (meta.all) { await show(meta.view, { all: true }, { force: true }); await flashHit(meta.sel(id)); }  
       };
     });
   }).catch(e => { const b = $('#gs-body', el); if (b) b.innerHTML = `<div class="empty"><div class="big">⚠️</div>${esc(e.message)}</div>`; });
@@ -5746,10 +6176,38 @@ function globalSearchInit() {
   });
   document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'k') { e.preventDefault(); inp.focus(); inp.select(); } });
 }
-/* ============================================================
- * 更新日志（点击底部版本号弹出，不需单独页面）
- * ============================================================ */
+
+
+
 const CHANGELOG = [
+  {
+    ver: '0.11.0', title: '批量管理、办公物资进出库、专项台账出入库记录表、导入模板下拉、盘库范围可选', date: '2026-09',
+    items: [
+      '<b>所有列表页支持批量管理</b>（物资管理 / 库存 & 清单 / 计量器具 / 药品 / 坏件 / 办公物资）：表头勾选即可全选当前列表，选中后弹出操作条——批量<b>设置类别 / 设置存放位置 / 停用 / 启用 / 删除</b>（坏件为批量改状态 / 删除；计量器具为批量封存 / 解封 / 删除）；删除时<b>已有出入库流水 / SN 记录的会自动跳过并告知原因</b>，不会破坏账目',
+      '<b>办公物资纳入出入库</b>：新增办公物资未选类别时自动归到「办公物资」分类，并像普通物资一样能在「出入库」页做出入库（下拉候选中标着「办公物资」）；数量 = 出入库流水 ± 手工调整（需要修正时点「编辑」直接改数量，两者不互相覆盖）',
+      '<b>「出入库」页的物资下拉现在带台账标签</b>：药品显示「批号 X · 单位 · 药品」，办公物资显示「单位 · 办公物资」，搜名称 / 编码 / 规格 / 库位都能命中',
+      '<b>药品管理 / 办公物资新增「📋 出入库记录」一键导出</b>：自建表格模板（表头 + 条件行 + 明细 + 入库 / 出库 / 净变化合计），可选时间段（本月 / 本年 / 近 90 天 / 不限），留空即全部',
+      '<b>导入模板（计量器具 / 药品 / 办公物资）升级</b>：<b>分类列、存放位置列、状态列都带下拉选项</b>（取系统里已设置的分类 / 存放位置，状态为启用 / 停用、启用 / 封存），共 500 行可用，选错还会拦截；选项放在隐藏工作表里，模板打开即用',
+      '<b>用户上传的 Logo 同时作为网页图标</b>：侧栏 Logo 换新后，浏览器标签页 / 收藏夹图标一起跟随（自定义 Logo > 版本特化 Logo > 内置）',
+      '<b>登录页窗口磨砂玻璃透明度调到 70%</b>，背景图更透出来（毛玻璃模糊 + 轻饱和）',
+      '<b>盘库范围可选</b>：顶部可按<b>分类</b>勾选本轮盘哪些物资（全选 / 清空一键切换），<b>药品 / 计量器具 / 办公物资</b>三项默认全部关闭——不勾就既不进盘点表也不导出，勾上才一并入表（药品 / 办公物资按结存生成盘点行，计量器具按“每台一行”随表登记）；改范围或「恢复账面」会先提醒，已录入的实物数量不会静默丢失',
+      '<b>邮件通知新增「手工补发」</b>：设置 → 邮件通知里可选类型（周期汇总 / 档位到期）并指定<b>归属日</b>，一键补发漏掉的提醒——忽略“今天已发过 / 未到间隔 / 未到执行时刻”，档位按所选日期算剩余天数且不改动“已提醒档位”标记；每次补发都在发送记录里留档（触发＝手工补发），漏发那天会显示「漏发·已手工补发」',
+      '<b>新增站内「使用文档」</b>：侧栏底部新增文档入口（<b>/docs</b>），VitePress 风格的文档站（左侧分组导航 + 顶栏搜索 + 右侧本页目录 + 亮 / 暗主题双主题），内容就是 Markdown —— <code>static/docs/</code> 下直接新增或修改、刷新即见，无需任何构建；自带使用手册（快速上手 / 各模块 / 常见问题），在源码目录里运行时还会把 <code>docs/*.md</code> 的运维文档一并列出',
+      '<b>坏件台账新增处置操作</b>：<b>送修</b>＝按借出办理（开出库单 + 借用台账，借用人＝维修方，可填应还日）、<b>已修复</b>＝按入库办理（库存回补并结清借用）、<b>丢弃</b>＝出库报废（真减库存，不足会拦下）、<b>停用</b>＝只标记不再处理（不动库存）；处置产生的单号显示在行内可直接点开，送修未还时不允许直接丢弃，避免账实不符',
+      '药品<b>追溯码</b>一维码下方的提示词改为「<b>请使用支付宝扫码验证药品信息</b>」（商品条码仍提示用扫码枪读取）',
+      '发布版本（开源版 / 安装包载荷）<b>不再携带代码注释</b>：仅根目录开发版保留注释，去注释保持行号与换行不变（同步 / 打包时自动处理），授权声明与第三方组件（LICENSE / NOTICE / vendor）原样保留',
+    ],
+  },
+  {
+    ver: '0.10.17', title: '新增「从数据库文件恢复」，每日备份改为完整数据包', date: '2026-09',
+    items: [
+      '数据维护新增 <b>「🛠 从数据库文件恢复」</b>：直接选一个备份的数据库文件就能把数据还原回来，<b>不用停服务、也不用手工往数据目录里拷文件</b>；执行前会自动把当前数据留存一份，恢复失败会整体回滚，不会把现有数据弄坏',
+      '备份列表里每个备份都能直接点 <b>「恢复」</b> 回到那一刻（定时备份、以及每次导入 / 恢复前自动留存的现场都在列表里）',
+      '<b>每日定时备份改为「完整数据包」（zip）</b>：里面是数据库 + 自定义模板 + 品牌图片 + 版本特化配置，换机 / 重装后一次就能还原整套环境（原先是单个数据库文件，容易被误拿去覆盖数据目录）',
+      '修复：<b>手工把备份文件拷进数据目录覆盖</b>导致数据库打不开、程序起不来的问题——现在启动时能识别这种“被覆盖”的情况并自动把作废的数据库日志隔离，程序照常启动；相关报错也换成了中文提示并直接指向恢复入口',
+      '「导出全部数据」的数据包现在也包含<b>版本特化配置</b>，导入时一并还原',
+    ],
+  },
   {
     ver: '0.10.16', title: '药品新增「单位」列，填了追溯码数量默认 1', date: '2026-09',
     items: [

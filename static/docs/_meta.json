@@ -1,0 +1,7 @@
+{
+  "groups": [
+    { "title": "开始", "items": ["index.md", "quick-start.md"] },
+    { "title": "各模块", "items": ["modules/skus.md", "modules/io.md", "modules/count.md", "modules/ledgers.md", "modules/settings.md"] },
+    { "title": "其它", "items": ["faq.md"] }
+  ]
+}

@@ -1,5 +1,5 @@
 @echo off
-rem === ThingsManager one-click start (Windows) ===
+
 cd /d "%~dp0"
 where node >nul 2>nul
 if errorlevel 1 (

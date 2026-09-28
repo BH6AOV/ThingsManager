@@ -1,32 +1,32 @@
 #!/usr/bin/env node
-/**
- * ThingsManager · 把构建产物发布到 Gitee Release（Gitee OpenAPI v5）
- * ===========================================================================
- * 为什么需要它：Gitee 的「流水线 / Gitee Go」是**企业版**功能（纯 UI 配置，
- *   仓库里放不了构建脚本），社区版仓库没有内置 CI。因此本项目的做法是：
- *   **在 GitHub Actions 上统一构建全平台产物**，再用本脚本把产物同步到
- *   Gitee 的 Release（附件），Gitee 仓库 / 发布页同样能拿到自动构建的安装包。
- *   （若你已开通 Gitee 企业版流水线，也可只在 Gitee 上构建 Linux 三件套，
- *     步骤与 README「发版流程」里给的命令一致。）
- *
- * 用法（Node ≥ 22，无需任何第三方依赖）：
- *   GITEE_TOKEN=<私人令牌> node packaging/tools/gitee-release.js <owner/repo> <tag> [产物目录=dist] [Release 说明文件]
- *
- * 示例：
- *   GITEE_TOKEN=xxxx node packaging/tools/gitee-release.js BH6AOV/thingsmanager v0.10.6 dist
- *
- * 说明：
- *   - 令牌：Gitee → 个人设置 → 私人令牌，勾选 `projects` 权限即可。
- *   - 未提供 GITEE_TOKEN 时**不报错**，只打印提示后退出（0），
- *     这样未配置该密钥的仓库跑 CI 不会失败。
- *   - 同步前会**先清空 Gitee 上已有的全部 Release**（不只是同一个 tag）：
- *     Gitee 的仓库附件总配额只有 1 GB（单附件 100 MB），而一套产物就 ~500 MB，
- *     历史版本留着会把配额占满，新版本传到一半就报「文件大小已超出仓库附件配额」。
- *     删除 Release **不会**删除对应的 git 标签（tag 仍保留在仓库里）。
- *     如需保留历史 Release，设 `GITEE_NO_PURGE=1`。
- *   - 同一 Release 内附件同名会先删旧再上传，可重复运行。
- *   - 用 GITEE_API 环境变量可指向其它兼容接口（默认 https://gitee.com/api/v5）。
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -61,8 +61,8 @@ async function api(pathname, { method = 'GET', json, form } = {}) {
     try {
         res = await fetch(API + pathname, opt);
     } catch (e) {
-        // 网络层异常（DNS 解析失败 / 连接被拒 / 超时，表现为 "fetch failed"）：
-        // 统一转成失败结果返回，由调用方决定跳过还是终止 —— 避免一次网络抖动把整个同步打断
+        
+        
         return { ok: false, status: 0, data: { error: causeText(e) } };
     }
     const text = await res.text();
@@ -73,7 +73,7 @@ const tok = () => 'access_token=' + encodeURIComponent(TOKEN);
 const short = d => (typeof d === 'string' ? d : JSON.stringify(d)).slice(0, 300);
 const mb = n => (n / 1048576).toFixed(2) + ' MB';
 
-// curl 可用性（只探测一次）
+
 function haveCurl() {
     if (haveCurl._v === undefined) {
         const r = spawnSync('curl', ['--version'], { encoding: 'utf8' });
@@ -82,10 +82,10 @@ function haveCurl() {
     return haveCurl._v;
 }
 
-// 用 curl 上传单个附件。
-// 为什么不直接用内置 fetch/undici：它的 bodyTimeout 写死 5 分钟，57 MB 的安装包经国际线路
-// 传到 gitee 很容易超时，报一个信息量极低的 "fetch failed"（小文件却能成功）。
-// curl 是流式读写、内存占用低，而且自带断线重试与可调超时。
+
+
+
+
 function uploadByCurl(url, file) {
     const r = spawnSync('curl', [
         '-sS', '--fail-with-body',
@@ -103,7 +103,7 @@ function uploadByCurl(url, file) {
     };
 }
 
-// 把异常里的底层原因（undici 的 cause 链）写成一行，便于对照排查
+
 function causeText(e) {
     const parts = [];
     for (let x = e; x && parts.length < 4; x = x.cause) {
@@ -115,12 +115,12 @@ function causeText(e) {
 (async () => {
     console.log('Gitee 发布：仓库=' + repoSlug + '  标签=' + tag + '  产物目录=' + DIR);
 
-    // 0) 先清空 Gitee 上已有的 Release（含历史版本）
-    // 为什么：Gitee 仓库附件总配额 1 GB（单附件 100 MB），而一套产物约 500 MB；
-    //   历史版本留着会挤占配额，新版本上传到一半就会报
-    //   「验证失败：文件大小已超出仓库附件配额：1 GB」。
-    //   注意：删除 Release 不会删除 git 标签，tag 仍留在仓库中。
-    //   要保留历史 Release 时设 GITEE_NO_PURGE=1。
+    
+    
+    
+    
+    
+    
     const noPurge = /^(1|true|yes)$/i.test(String(process.env.GITEE_NO_PURGE || ''));
     if (noPurge) {
         console.log('[i] GITEE_NO_PURGE 已开启：保留 Gitee 上已有的 Release（只清同 tag 的同名附件）');
@@ -139,7 +139,7 @@ function causeText(e) {
             if (arr.length < 100) break;
         }
         if (listErr) {
-            // 列表没读到，无从判断是否还有旧 Release（上方已提示），这里不再给出"暂无"这类误导性结论
+            
         } else if (!all.length) {
             console.log('[.] Gitee 上暂无 Release，无需清理');
         } else {
@@ -152,7 +152,7 @@ function causeText(e) {
         }
     }
 
-    // 1) 复用已有 Release（同一 tag），否则创建
+    
     let rel = (await api(`/repos/${repoSlug}/releases/tags/${encodeURIComponent(tag)}?${tok()}`)).data;
     if (!rel || !rel.id) {
         const r = await api(`/repos/${repoSlug}/releases`, {
@@ -170,11 +170,11 @@ function causeText(e) {
         }
     }
 
-    // 2) 清掉同名旧附件（可重复发布）
+    
     const detail = (await api(`/repos/${repoSlug}/releases/${rel.id}`)).data || {};
     const old = new Map((Array.isArray(detail.assets) ? detail.assets : []).map(a => [a.name, a.id]));
 
-    // 3) 上传目录内的文件（不含子目录）：按体积从小到大，先易后难
+    
     const entries = fs.readdirSync(DIR, { withFileTypes: true })
         .filter(e => e.isFile())
         .map(e => ({ name: e.name, size: fs.statSync(path.join(DIR, e.name)).size }))
@@ -186,7 +186,7 @@ function causeText(e) {
     const failed = [];
     for (const { name, size } of entries) {
         const fp = path.join(DIR, name);
-        // 同名旧附件先删掉，保证可重复运行
+        
         if (old.has(name)) {
             const d = await api(`/repos/${repoSlug}/releases/${rel.id}/attach_files/${old.get(name)}?${tok()}`, { method: 'DELETE' });
             if (!d.ok) console.log('[!] 旧附件删除失败（同名可能已存在，继续尝试上传）：' + name + ' HTTP ' + d.status);
@@ -202,14 +202,14 @@ function causeText(e) {
                 const secs = ((Date.now() - t0) / 1000).toFixed(1);
                 if (r.ok) { ok = true; console.log(`[OK] 已上传 ${name}（${mb(size)}，耗时 ${secs}s）`); }
                 else {
-                    // stderr 是 curl 自身的错误，stdout 是服务端返回体（Gitee 的业务报错在这里）
+                    
                     lastErr = (`curl exit=${r.code} ` + [r.err, r.out].filter(Boolean).join(' | ')).trim().slice(0, 400);
                     console.log(`[!] 失败（耗时 ${secs}s）：${lastErr}`);
                 }
             }
         }
         if (!ok) {
-            // 兜底：没有 curl 或 curl 两次都没成，再试一次内置 fetch
+            
             try {
                 const form = new FormData();
                 form.append('access_token', TOKEN);
@@ -232,6 +232,6 @@ function causeText(e) {
         process.exit(1);
     }
 
-    // 可选：同步标签（若 Gitee 上没有该标签，Release 会自动创建标签；这里仅作提示）
+    
     if (!rel.tag_name) console.log('[i] 提示：若 Gitee 上没有 ' + tag + ' 标签，可在本地执行  git push gitee main --tags');
 })().catch(e => { console.error('[X] ' + (e && e.message || e)); process.exit(1); });

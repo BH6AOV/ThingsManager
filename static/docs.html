@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>使用文档 · ThingsManager</title>
+  <link rel="icon" id="favicon" href="/logo.svg?v=0.11.0.1" type="image/svg+xml" />
+  <link rel="stylesheet" href="/docs-assets/docs.css?v=0.11.0.1" />
+</head>
+<body>
+  <div class="dv-app">
+    <header class="dv-nav">
+      <button class="dv-icon-btn dv-menu" id="dv-menu" title="目录" type="button" aria-label="目录">☰</button>
+      <a class="dv-brand" href="/" title="返回仓库管理">
+        <span class="dv-logo" id="dv-logo">仓</span>
+        <span class="dv-titles"><b id="dv-brand-name">仓库管理</b><span class="dv-sub">使用文档 <em id="dv-ver"></em></span></span>
+      </a>
+      <div class="dv-search">
+        <span class="dv-search-ico">🔍</span>
+        <input id="dv-q" type="search" placeholder="搜索文档…" autocomplete="off" aria-label="搜索文档" />
+        <div class="dv-results" id="dv-results" hidden></div>
+      </div>
+      <div class="dv-actions">
+        <button class="dv-icon-btn" id="dv-theme" title="切换亮 / 暗主题" type="button">🌙</button>
+        <a class="dv-icon-btn" href="/" title="返回仓库管理系统" aria-label="返回系统">↩</a>
+      </div>
+    </header>
+
+    <div class="dv-shell">
+      <aside class="dv-side" id="dv-side" aria-label="文档目录"></aside>
+      <div class="dv-mask" id="dv-mask"></div>
+      <main class="dv-main">
+        <div class="dv-crumb" id="dv-crumb"></div>
+        <article class="dv-article" id="dv-article"><div class="dv-loading">正在载入…</div></article>
+        <nav class="dv-pager" id="dv-pager"></nav>
+        <footer class="dv-foot">
+          <span>ThingsManager 使用文档 · 内容为 Markdown，可在 <code>static/docs/</code> 下直接新增或修改（改完刷新即见）</span>
+        </footer>
+      </main>
+      <aside class="dv-toc" id="dv-toc" aria-label="本页目录"></aside>
+    </div>
+  </div>
+  <div class="dv-toast" id="dv-toast"></div>
+  <script src="/docs-assets/docs.js?v=0.11.0.1"></script>
+</body>
+</html>

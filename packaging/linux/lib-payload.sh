@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# =============================================================================
-# ThingsManager · 共享载荷组装（deb / rpm / AppImage 三个脚本复用）
-#
-#   source packaging/linux/lib-payload.sh
-#   thm_build_payload <amd64|arm64> <目标目录>
-#
-# 载荷结构：<目标目录>/{app/**, runtime/bin/node}
-#   app/     —— 主代码（server.js / supervisor.js / static / template / node_modules）
-#   runtime/ —— 内嵌的官方 Node 单文件运行时（从 nodejs.org 下载并缓存）
-#
-# 环境变量（都可选）：
-#   THM_CACHE_DIR  下载缓存目录（默认 <repo>/.cache）
-#   THM_NODE_VER   覆盖内嵌 Node 版本（默认取仓库根 .node-version）
-# =============================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 set -euo pipefail
 
 THM_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,17 +22,17 @@ THM_NODE_FILE="$THM_ROOT/.node-version"
 THM_NODE_VER="${THM_NODE_VER:-$(tr -d ' \r\n' < "$THM_NODE_FILE")}"
 THM_CACHE="${THM_CACHE_DIR:-$THM_ROOT/.cache}"
 
-# 说明：下面三个人读的日志函数**统一输出到 stderr**。
-# 原因：部分函数用 stdout 返回数据（例如 thm_fetch_node 返回 tar 包路径），
-# 若日志混进 stdout，调用方 $( ) 捕获到的就是"日志+路径"的混合文本，
-# 会让 tar 拿到非法路径而失败（曾在 CI 上表现为 "Cannot open: No such file or directory"）。
+
+
+
+
 thm_log()  { printf '[.] %s\n' "$*" >&2; }
 thm_ok()   { printf '[OK] %s\n' "$*" >&2; }
 thm_warn() { printf '[!] %s\n' "$*" >&2; }
 thm_fail() { printf '[X] %s\n' "$*" >&2; exit 1; }
 
-# 把目录下会被 Linux 执行的文本文件统一成 LF
-# （CRLF 会让 #!/bin/sh 脚本报 bad interpreter，dpkg/rpm 安装直接失败）
+
+
 thm_normalize_lf() {
     local dir="$1" n=0 f
     [ -d "$dir" ] || return 0
@@ -49,7 +49,7 @@ thm_normalize_lf() {
     return 0
 }
 
-# 从 package.json 读版本号（不依赖本机 node）
+
 thm_version() {
     local v
     v="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$THM_ROOT/package.json" | head -n1)"

@@ -1,10 +1,10 @@
-// ThingsManager 桌面控制器（Windows 服务托管 + 系统托盘守护）
-// 编译目标：.NET Framework 4.8（Windows 自带，零额外运行时）
-// 用法：--install / --uninstall / --restart / --autostart <auto|demand>
-//       --open（桌面/开始菜单图标：确保服务运行后自动打开 http://<本机IP>:<端口>）
-//       --start-svc / --stop-svc（提权启动/停止服务，供托盘调用）
-//       --tray（登录自启/安装后拉起：仅托盘，不弹浏览器）
-//       无参数且由 SCM 启动 → 作为 Windows 服务运行
+
+
+
+
+
+
+
 using System;
 using System.Collections;
 using System.Configuration.Install;
@@ -49,8 +49,8 @@ namespace ThingsManager
         public static string Supervisor { get { return Path.Combine(AppDir, "supervisor.js"); } }
         public static string CfgFile { get { return Path.Combine(AppDir, "runtime.config.json"); } }
 
-        // 便携版标志：程序目录下存在 portable.flag 时以「便携模式」运行
-        // （不注册系统服务；数据目录与端口由 app\runtime.config.json 指定，便携包内为程序目录下的 data\）
+        
+        
         public static string PortableFlag { get { return Path.Combine(ExeDir, "portable.flag"); } }
         public static bool Portable { get { try { return File.Exists(PortableFlag); } catch { return false; } } }
 
@@ -240,11 +240,11 @@ namespace ThingsManager
 
             if (Environment.UserInteractive)
             {
-                // 交互启动：--tray = 仅托盘（登录自启 / 安装后拉起用，不自动弹浏览器）；
-                // 桌面 / 开始菜单快捷方式或直接双击（默认，等价 --open）= 确保后台服务在运行，并自动打开 http://<本机IP>:<端口>
+                
+                
                 bool openMode = true;
                 if (args != null && args.Length > 0 && args[0].ToLowerInvariant() == "--tray") openMode = false;
-                // 便携版（存在 portable.flag）：不碰系统服务，直接用本目录内嵌 node 运行 app\supervisor.js
+                
                 if (Paths.Portable) return AppMain.RunPortable(openMode);
                 return AppMain.RunInteractive(openMode);
             }
@@ -253,31 +253,31 @@ namespace ThingsManager
             return 0;
         }
 
-        // 交互入口：openMode=true 时先“确保服务运行 + 自动打开面板”，再成为托盘（若已有托盘则仅开面板即退出）
+        
         private static int RunInteractive(bool openMode)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             if (openMode)
             {
-                AppMain.EnsureServiceRunning();   // 修复：托盘“关闭程序”停掉服务后，再启动(桌面图标)时服务未拉起导致端口监听失效
-                ThmTray.OpenPanel();              // 自动打开 http://<本机IP>:<端口>
+                AppMain.EnsureServiceRunning();   
+                ThmTray.OpenPanel();              
             }
-            // 托盘单实例：安装后即时启动 + 登录自启/双击重复拉起时，后到者直接退出，避免图标重复
+            
             bool createdNew;
             using (System.Threading.Mutex trayMutex = new System.Threading.Mutex(true, "ThingsManager_Tray", out createdNew))
             {
-                if (!createdNew) return 0; // 同会话已有托盘实例在运行（本次仅打开了面板）
+                if (!createdNew) return 0; 
                 Application.Run(new ThmTray());
             }
             return 0;
         }
 
-        /* ---------------------------------------------------------------- 便携模式
-         * 解压即用：不注册服务、不写注册表，直接用包内 runtime\node.exe 运行 app\supervisor.js；
-         * 数据目录 / 端口来自 app\runtime.config.json（便携包内 dataDir 指向程序目录下的 data\）。
-         * 双击 exe = 启动后台 + 打开浏览器 + 驻留托盘；托盘「关闭程序」会结束后台进程。
-         * ---------------------------------------------------------------------------- */
+        
+
+
+
+
         private static Process _portableNode;
 
         private static int RunPortable(bool openMode)
@@ -285,19 +285,19 @@ namespace ThingsManager
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             int port = Paths.ReadPort();
-            // 端口已在监听说明本目录的程序已在运行（或与安装版同端口）：不再重复拉起
+            
             if (!ThmTray.PortUp(port)) AppMain.StartPortableNode();
             if (openMode) ThmTray.OpenPanel();
             bool createdNew;
             using (System.Threading.Mutex trayMutex = new System.Threading.Mutex(true, "ThingsManager_Tray", out createdNew))
             {
-                if (!createdNew) return 0;   // 已有托盘实例在运行（本次只启动了后台 / 打开了面板）
+                if (!createdNew) return 0;   
                 Application.Run(new ThmTray(true));
             }
             return 0;
         }
 
-        // 便携版日志：<程序目录>\logs\server.log（启动时若超过 2MB 先清空，避免无限增长）
+        
         private static readonly object _logLock = new object();
         private static string _logFile;
 
@@ -321,7 +321,7 @@ namespace ThingsManager
             catch { }
         }
 
-        // 用内嵌 node 启动 app\supervisor.js（由 supervisor 守护 server.js，异常退出自动拉起）
+        
         internal static bool StartPortableNode()
         {
             try
@@ -340,11 +340,11 @@ namespace ThingsManager
                 psi.WorkingDirectory = Paths.AppDir;
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
-                // 必须重定向输出：本程序是 GUI 子系统（winexe）没有控制台，若让子进程继承无效的标准句柄，
-                // node 第一次 console.log 就会因写入失败而退出；顺便把日志落到 logs\server.log 便于排错。
+                
+                
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
-                // 子进程输出是 UTF-8，而 .NET 默认按系统 ANSI（中文系统=GBK）解码 → 日志会乱码，这里显式指定
+                
                 psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
                 psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
                 _portableNode = Process.Start(psi);
@@ -362,7 +362,7 @@ namespace ThingsManager
             }
         }
 
-        // 关闭便携版：结束内嵌 node 及其子进程（supervisor → server），不触碰系统服务
+        
         internal static void StopPortableNode()
         {
             try
@@ -378,7 +378,7 @@ namespace ThingsManager
             catch { }
         }
 
-        // 确保 ThingsManager 后台服务处于运行状态；服务未启动且非管理员时自动提权拉起
+        
         internal static bool EnsureServiceRunning()
         {
             try
@@ -388,14 +388,14 @@ namespace ThingsManager
                 {
                     sc.Refresh();
                     if (sc.Status == ServiceControllerStatus.Running || sc.Status == ServiceControllerStatus.StartPending) return true;
-                    // “关闭程序”停止可能尚未完全结束：先等它彻底停下，避免 Start 冲突
+                    
                     if (sc.Status == ServiceControllerStatus.StopPending)
                     {
                         try { sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15)); } catch { }
                     }
                     if (!Ops.IsAdmin())
                     {
-                        if (!Ops.RunElevated("--start-svc")) return false; // 用户取消提权
+                        if (!Ops.RunElevated("--start-svc")) return false; 
                     }
                     else
                     {
@@ -443,8 +443,8 @@ namespace ThingsManager
             catch { }
         }
 
-        // 停止服务并等待它真正变为 Stopped。
-        // 注意：sc stop 只是“发出停止请求”就返回，服务还处于 StopPending；不等它停完就 Install/Start 必然失败。
+        
+        
         private static bool StopServiceAndWait(int seconds)
         {
             try
@@ -460,7 +460,7 @@ namespace ThingsManager
             catch { return false; }
         }
 
-        // 启动服务并等待 Running（返回是否真的跑起来了）
+        
         private static bool StartServiceAndWait(int seconds)
         {
             try
@@ -500,10 +500,10 @@ namespace ThingsManager
                 if (existed)
                 {
                     if (!quiet) Ops.Info("检测到 ThingsManager 服务已存在，将停止并重新注册。");
-                    // 1) 先停下来并等它真的停了（sc stop 是异步的）
+                    
                     StopServiceAndWait(30);
-                    // 2) 服务已存在时必须先卸载，否则 AssemblyInstaller.Install 会抛“服务已存在”导致整个安装静默失败
-                    //    （这一直是“升级安装后服务没起来、要手动重启”的根因）
+                    
+                    
                     try
                     {
                         using (AssemblyInstaller old = new AssemblyInstaller(Application.ExecutablePath, null))
@@ -512,8 +512,8 @@ namespace ThingsManager
                             old.Uninstall(null);
                         }
                     }
-                    catch { /* 卸载失败不致命：下面重新 Install 会覆盖配置；仍失败则在启动阶段重试 */ }
-                    // 等 SCM 真正把服务删掉（标记删除期间同名服务不能重建）
+                    catch {  }
+                    
                     for (int i = 0; i < 30 && Ops.ServiceExists("ThingsManager"); i++) System.Threading.Thread.Sleep(500);
                 }
                 using (AssemblyInstaller installer = new AssemblyInstaller(Application.ExecutablePath, null))
@@ -522,7 +522,7 @@ namespace ThingsManager
                     installer.Install(new Hashtable());
                     installer.Commit(new Hashtable());
                 }
-                // 3) 启动并等待 Running；覆盖安装时 SCM 可能还在收尾，失败就稍等重试一次
+                
                 bool started = StartServiceAndWait(25);
                 if (!started)
                 {
@@ -624,7 +624,7 @@ namespace ThingsManager
             _menu.Items.Add("打开面板", null, OnOpenClick);
             if (_portable)
             {
-                // 便携版：没有系统服务，「开机自启 / 重启服务」不适用，改用「打开数据目录」
+                
                 _menu.Items.Add("打开数据目录", null, OnOpenDataClick);
             }
             else
@@ -637,10 +637,10 @@ namespace ThingsManager
             _menu.Items.Add(_portable ? "关闭程序（结束后台并退出）" : "关闭程序（停止服务并退出）", null, OnExitClick);
             _icon.ContextMenuStrip = _menu;
             _icon.DoubleClick += OnOpenClick;
-            // 单击托盘小按钮即弹出菜单（用户反馈原需右键不便）
+            
             _icon.MouseUp += delegate(object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) _menu.Show(Cursor.Position); };
             RefreshState();
-            // 首次出现提示：图标默认在托盘区；若被折叠请点任务栏“^”展开
+            
             _icon.BalloonTipTitle = _portable ? "ThingsManager · 便携版" : "ThingsManager · 托盘守护";
             _icon.BalloonTipText = _portable
                 ? "已在本机运行（打开面板 / 打开数据目录 / 关闭程序）。\n数据保存在程序目录的 data 文件夹，拷走整个文件夹即可搬机。\n若看不到图标，请点击任务栏“^”展开隐藏图标。"
@@ -648,7 +648,7 @@ namespace ThingsManager
             _icon.ShowBalloonTip(2000);
         }
 
-        // 便携版：在资源管理器中打开数据目录（程序目录下的 data）
+        
         private void OnOpenDataClick(object sender, EventArgs e)
         {
             try
@@ -660,7 +660,7 @@ namespace ThingsManager
             catch { }
         }
 
-        // 托盘图标：优先使用与程序同目录的 logo.ico（默认全局 Logo），缺失时退回系统图标
+        
         private static Icon LoadTrayIcon()
         {
             try
@@ -672,7 +672,7 @@ namespace ThingsManager
             return SystemIcons.Application;
         }
 
-        // 自动打开管理面板：优先 <本机IP>:<端口>（服务就绪才打开），本机 IP 不可达时自动回退 127.0.0.1
+        
         public static void OpenPanel()
         {
             try
@@ -684,7 +684,7 @@ namespace ThingsManager
             catch { }
         }
 
-        // 取本机 IPv4 局域网地址：偏好“已连接且带默认网关”的网卡；无网关时回退任一非回环 IPv4；找不到返回 null（调用方回退 127.0.0.1）
+        
         public static string GetLanIp()
         {
             try
@@ -723,7 +723,7 @@ namespace ThingsManager
             return null;
         }
 
-        // 轮询端口直到就绪，返回实际可用的主机（本机 IP 优先、127.0.0.1 兜底）
+        
         public static string PickReadyHost(int port, int timeoutMs)
         {
             string lan = ThmTray.GetLanIp();
@@ -754,7 +754,7 @@ namespace ThingsManager
             return false;
         }
 
-        // 端口是否已在监听（便携模式用它判断“本目录的程序是否已在运行”）
+        
         public static bool PortUp(int port)
         {
             return ThmTray.CanConnect("127.0.0.1", port, 500);
@@ -793,7 +793,7 @@ namespace ThingsManager
 
         private void OnOpenClick(object sender, EventArgs e)
         {
-            // 先确保后台在运行（便携版=拉起内嵌 node；安装版=确保服务在跑），再打开面板
+            
             if (_portable)
             {
                 int p = Paths.ReadPort();
@@ -836,7 +836,7 @@ namespace ThingsManager
 
         private void OnExitClick(object sender, EventArgs e)
         {
-            // “关闭程序”：先确认，再一并停掉后台（安装版=停服务；便携版=结束内嵌进程），避免“退托盘后程序仍在后台运行”
+            
             string msg = _portable
                 ? "确定要关闭 ThingsManager 吗？\n\n将结束后台进程并退出托盘（网页将无法访问）。数据仍保存在程序目录的 data 文件夹里。"
                 : "确定要关闭 ThingsManager 吗？\n\n将一并停止后台服务并退出托盘（网页将无法访问）。";

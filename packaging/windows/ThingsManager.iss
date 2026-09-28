@@ -1,34 +1,34 @@
 ﻿; ============================================================
-; ThingsManager · Windows 安装版（非 portable）— Inno Setup
-; 作业根目录：dist/windows/（本脚本位于 dist/windows/build/，产物输出到 dist/windows/）
-; 安装：注册为 Windows 服务(0.0.0.0:3200) + 托盘 + 开机自启(服务) + 数据在 %ProgramData%\ThingsManager
-; 安装前：检测后台是否正在运行（服务 / 托盘）；在运行则弹窗提供「停止运行并继续安装」，停止后继续
-; 安装后：[Run] 里的 --install-quiet 重新注册并启动服务、--tray 拉起托盘（即“安装完成后自动重启后端”）
-; ============================================================
-; 版本 / 架构 / 路径可由打包脚本或 CI 通过 ISCC 的 /D 注入（不传时用下方默认值，等于本目录直接编译）
+
+
+
+
+
+
+
 #define MyAppName "ThingsManager"
 #define MyPublisher "橙子木"
 #ifndef MyAppVer
-#define MyAppVer "0.10.16"
+#define MyAppVer "0.11.0"
 #endif
 #ifndef VerInfoVersion
-#define VerInfoVersion "0.10.16.0"
+#define VerInfoVersion "0.11.0.0"
 #endif
 #ifndef MyArch
 #define MyArch "x64"
 #endif
 #ifndef StageSource
-; 相对本文件目录：dist/windows/build/stage/*
+
 #define StageSource "stage\*"
 #endif
 #ifndef OutDir
-; 相对本文件目录：dist/windows/
+
 #define OutDir ".."
 #endif
 #ifndef OutBase
-; 产物命名规范：
-;   ThingsManager_<Version>_<system>_<cpuplatform>.<filetype>
-;   例：ThingsManager_0.10.6_windows_AMD64.exe（cpuplatform: AMD64 / X86 / ARM64）
+
+
+
 #if MyArch == "arm64"
 #define OutBase "ThingsManager_" + MyAppVer + "_windows_ARM64"
 #else
@@ -36,8 +36,8 @@
 #endif
 #endif
 #ifndef LangFile
-; 简体中文语言文件：默认用编译器自带的副本（本机安装 Inno Setup 通常自带中文）。
-; CI 上 choco 安装的 Inno Setup 常缺中文，build.ps1 会下载一份到 .cache 并经 /DLangFile= 覆盖本值。
+
+
 #define LangFile "compiler:Languages\ChineseSimplified.isl"
 #endif
 
@@ -58,7 +58,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=commandline
 #if MyArch == "arm64"
-; arm64 安装包：只允许在 Windows on ARM 上安装（载荷内嵌 arm64 版 node.exe）
+
 ArchitecturesAllowed=arm64
 ArchitecturesInstallIn64BitMode=arm64
 #else
@@ -74,7 +74,7 @@ WizardStyle=modern
 UninstallDisplayName=ThingsManager {#MyAppVer}（卸载）
 UninstallDisplayIcon={app}\ThingsManager.exe
 CloseApplications=no
-; 数据默认放 %ProgramData%\ThingsManager（不随卸载删除，保护数据）
+
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: "{#LangFile}"
@@ -82,37 +82,37 @@ Name: "chinesesimp"; MessagesFile: "{#LangFile}"
 [Files]
 Source: "{#StageSource}"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; 桌面/开始菜单图标双击 = 确保后台服务在运行并自动打开 http://<本机IP>:<端口>（服务未启动会先拉起，修复“关闭程序后再启动端口不起”）
+
 [Icons]
 Name: "{autoprograms}\ThingsManager · 仓库管理"; Filename: "{app}\ThingsManager.exe"; Parameters: "--open"; WorkingDir: "{app}"
 Name: "{autodesktop}\ThingsManager · 仓库管理"; Filename: "{app}\ThingsManager.exe"; Parameters: "--open"; WorkingDir: "{app}"; Flags: createonlyiffileexists
 
 [Registry]
-; 托盘随“当前用户”登录自启（服务本身由 Windows 服务开机自启，二者配合实现常驻）
+
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ThingsManagerTray"; ValueData: """{app}\ThingsManager.exe"" --tray"; Flags: uninsdeletevalue
 
 [Run]
-; 注册并启动服务（已存在则先停后重装，安装后自动重新启动后端）
+
 Filename: "{app}\ThingsManager.exe"; Parameters: "--install-quiet"; Flags: runhidden waituntilterminated; StatusMsg: "正在注册并启动 ThingsManager 服务…"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=ThingsManager3200"; Flags: runhidden; StatusMsg: "配置防火墙…"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=ThingsManager3200 dir=in action=allow protocol=TCP localport=3200 profile=private,domain,public"; Flags: runhidden; StatusMsg: "配置防火墙…"
-; 立即拉起托盘守护（无需等下次登录；单实例，重复启动自动去重）
+
 Filename: "{app}\ThingsManager.exe"; Parameters: "--tray"; Flags: nowait runascurrentuser; StatusMsg: "正在启动托盘守护…"
 Filename: "http://127.0.0.1:3200/"; Flags: postinstall shellexec unchecked; Description: 打开管理面板（http://127.0.0.1:3200）
 
 [UninstallRun]
-; 停删后台服务（RunOnceId 保证每次卸载只执行一次，消除编译告警）
+
 Filename: "{app}\ThingsManager.exe"; Parameters: "--uninstall-quiet"; Flags: runhidden waituntilterminated; RunOnceId: "StopService"
-; 结束残留托盘进程（防止 exe 被占用导致删除失败）
+
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM ThingsManager.exe /F"; Flags: runhidden; RunOnceId: "KillTray"
 
-; ============================================================
-; 安装前检测：程序是否已在后台运行（服务 / 托盘）
-;  在运行 → 弹出带「停止运行并继续安装」按钮的窗口；停止服务与托盘后继续安装
-;  取消 → 中止安装并给出提示
-;  安装完成后：由 [Run] 的 --install-quiet / --tray 重新启动后端与托盘
-; 说明：仅使用 sc.exe / taskkill.exe（系统自带，不依赖已安装程序的新旧版本）
-; ============================================================
+
+
+
+
+
+
+
 [Code]
 const
   THMService = 'ThingsManager';

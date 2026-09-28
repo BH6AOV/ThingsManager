@@ -1,18 +1,18 @@
 #!/usr/bin/env node
-/**
- * ThingsManager · .deb 结构校验器（Windows 上也能跑；不依赖 dpkg）
- * 用法：node verify-deb.js [路径]（默认取本目录 ../ 下最新的 ThingsManager_*.deb）
- * 校验：ar 归档与三成员 → control 内容 → 维护脚本权限位 → data 条目（关键路径/权限/大小）→ md5sums 全量比对
- */
+
+
+
+
+
 'use strict';
-try { require('child_process').execSync('chcp 65001', { stdio: 'ignore' }); } catch { /* 让中文在 GBK 控制台也能正常显示 */ }
+try { require('child_process').execSync('chcp 65001', { stdio: 'ignore' }); } catch {  }
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
 
 const HERE = __dirname;
-/** 向上逐层找 package.json，返回仓库根（兼容两种目录布局） */
+
 function findRepoRoot() {
     let dir = HERE;
     for (let i = 0; i < 5; i++) {
@@ -25,7 +25,7 @@ function findRepoRoot() {
 }
 let debFile = process.argv[2];
 if (!debFile) {
-    // 依次在脚本同级、上一级、仓库根/dist、仓库根/dist/linux 里找最新的 deb
+    
     const cands = [];
     const repo = findRepoRoot();
     for (const dir of [path.join(HERE, '..'), HERE, path.join(repo, 'dist'), path.join(repo, 'dist', 'linux')]) {
@@ -43,7 +43,7 @@ console.log('[.] 校验：' + debFile + '  (' + (raw.length / 1048576).toFixed(2
 const pass = [], fail = [];
 const chk = (ok, msg, extra) => (ok ? pass : fail).push((ok ? 'PASS ' : 'FAIL ') + msg + (extra !== undefined ? '  -> ' + JSON.stringify(extra) : ''));
 
-// ---------- ar 解析 ----------
+
 if (raw.subarray(0, 8).toString('latin1') !== '!<arch>\n') { console.error('[X] 不是 ar 归档（缺 !<arch> 头）'); process.exit(1); }
 const members = {};
 let off = 8;
@@ -61,7 +61,7 @@ chk(!!members['control.tar.gz'], 'ar 含 control.tar.gz');
 chk(!!members['data.tar.gz'], 'ar 含 data.tar.gz');
 chk(members['debian-binary'] && members['debian-binary'].toString() === '2.0\n', 'debian-binary 内容为 2.0', members['debian-binary'] && members['debian-binary'].toString().trim());
 
-// ---------- tar 解析 ----------
+
 function readTar(buf) {
     const out = {};
     let p = 0, pending = null;
@@ -76,14 +76,14 @@ function readTar(buf) {
         let name = str(0, 100);
         if (prefix) name = prefix + '/' + name;
         const content = buf.subarray(p + 512, p + 512 + size);
-        if (type === 'x') {                        // PAX 扩展头
+        if (type === 'x') {                        
             pending = {};
             for (const rec of content.toString('utf8').split('\n')) {
                 const m = rec.match(/^\d+ ([^=]+)=(.*)$/);
                 if (m) pending[m[1]] = m[2];
             }
         } else if (type !== 'g') {
-            // 目录条目以 '/' 结尾（PAX 与非 PAX 两条路径都要归一化，否则键不一致）
+            
             const real = (pending && pending.path ? pending.path : name).replace(/^\.\//, '').replace(/\/+$/, '');
             out[real] = { mode: octv(100, 8), size, type, content };
             pending = null;
@@ -95,13 +95,13 @@ function readTar(buf) {
 const ctrl = readTar(zlib.gunzipSync(members['control.tar.gz']));
 const data = readTar(zlib.gunzipSync(members['data.tar.gz']));
 
-// ---------- control ----------
+
 const controlTxt = ctrl['control'] ? ctrl['control'].content.toString('utf8') : '';
 const field = k => { const m = controlTxt.match(new RegExp('^' + k + ': (.*)$', 'm')); return m ? m[1].trim() : ''; };
 console.log('\n--- control ---\n' + controlTxt.trim());
 chk(/^Package: thingsmanager$/m.test(controlTxt), 'Package 字段');
-// Architecture 用 Debian 命名（amd64 / arm64 / i386），并与产物文件名里的 CPU 平台对应
-// （命名规范：ThingsManager_<版本>_linux_<CPU平台>.<类型>）
+
+
 const debBase = path.basename(debFile);
 const expectArch = /_ARM64\.deb$/i.test(debBase) ? 'arm64'
     : /_AMD64\.deb$/i.test(debBase) ? 'amd64'
@@ -118,7 +118,7 @@ for (const s of ['postinst', 'prerm', 'postrm']) {
     chk(ctrl[s] && ctrl[s].mode === 0o755, s + ' 权限位 0755', ctrl[s] ? '0' + ctrl[s].mode.toString(8) : '-');
     if (ctrl[s]) chk(ctrl[s].content.toString('utf8').startsWith('#!/bin/sh'), s + ' 以 #!/bin/sh 开头');
 }
-// 换行：维护脚本必须是 LF。CRLF 会让内核按 "#!/bin/sh\r" 找不到解释器，安装直接失败（dpkg 报 exit status 127）
+
 for (const s of ['control', 'conffiles', 'postinst', 'prerm', 'postrm']) {
     const e = ctrl[s];
     if (e) chk(!e.content.includes(0x0d), s + ' 为 LF 换行（无 CR）');
@@ -126,7 +126,7 @@ for (const s of ['control', 'conffiles', 'postinst', 'prerm', 'postrm']) {
 chk(!!ctrl['md5sums'], 'control 含 md5sums');
 chk(!!ctrl['conffiles'], 'control 含 conffiles', ctrl['conffiles'] && ctrl['conffiles'].content.toString().trim());
 
-// ---------- data 关键项 ----------
+
 const need = {
     'opt/thingsmanager/app/server.js': 0o644,
     'opt/thingsmanager/app/package.json': 0o644,
@@ -145,7 +145,7 @@ for (const [p, mode] of Object.entries(need)) {
 }
 const nodeEntry = data['opt/thingsmanager/runtime/bin/node'];
 if (nodeEntry) chk(nodeEntry.size > 100 * 1024 * 1024, '内嵌 node 体积合理', (nodeEntry.size / 1048576).toFixed(1) + ' MB');
-// 内置盘库模板：主体版为 count_template.xlsx，开源版为 count_template.open.xlsx（两版共用同一份校验器）
+
 const tplKeys = Object.keys(data).filter(k => /^opt\/thingsmanager\/app\/template\/count_template.*\.xlsx$/.test(k));
 chk(tplKeys.length > 0, 'data 含盘库内置模板（count_template*.xlsx）', tplKeys.map(k => path.basename(k)).join(', ') || '-');
 chk(tplKeys.every(k => data[k].mode === 0o644), '盘库内置模板权限 0644', tplKeys.map(k => '0' + data[k].mode.toString(8)).join(', '));
@@ -154,7 +154,7 @@ chk(data['opt/thingsmanager/app/node_modules/express'] && data['opt/thingsmanage
 const nmCount = Object.keys(data).filter(k => k.startsWith('opt/thingsmanager/app/node_modules/')).length;
 chk(nmCount > 2000, 'node_modules 文件数合理', nmCount);
 
-// 应用文件与工作区一致
+
 const ws = findRepoRoot();
 for (const f of ['server.js', 'static/app.js', 'static/index.html', 'static/app.css']) {
     const a = crypto.createHash('md5').update(fs.readFileSync(path.join(ws, f))).digest('hex');
@@ -162,7 +162,7 @@ for (const f of ['server.js', 'static/app.js', 'static/index.html', 'static/app.
     chk(!!e && crypto.createHash('md5').update(e.content).digest('hex') === a, '与工作区一致：' + f);
 }
 
-// systemd 关键行
+
 if (data['lib/systemd/system/thingsmanager.service']) {
     const u = data['lib/systemd/system/thingsmanager.service'].content.toString('utf8');
     chk(/^Restart=always$/m.test(u), 'unit: Restart=always（常驻）');
@@ -171,13 +171,13 @@ if (data['lib/systemd/system/thingsmanager.service']) {
     chk(/THM_CONFIG=\/var\/lib\/thingsmanager\/runtime.config.json/.test(u), 'unit: THM_CONFIG 指向数据目录');
     chk(/^WantedBy=multi-user.target$/m.test(u), 'unit: WantedBy=multi-user.target');
 }
-// 会被系统执行的脚本/配置同样必须 LF（/usr/bin 入口是 #!/bin/sh，CRLF 直接 bad interpreter）
+
 for (const p of ['usr/bin/thingsmanager', 'lib/systemd/system/thingsmanager.service', 'etc/thingsmanager/thingsmanager.env']) {
     const e = data[p];
     if (e) chk(!e.content.includes(0x0d), p + ' 为 LF 换行（无 CR）');
 }
 
-// md5sums 全量比对
+
 if (ctrl['md5sums']) {
     let bad = [], n = 0;
     for (const line of ctrl['md5sums'].content.toString('utf8').trim().split('\n')) {
@@ -194,7 +194,7 @@ if (ctrl['md5sums']) {
     chk(!/^\/|\.\.\//.test(ctrl['md5sums'].content.toString('utf8')), 'md5sums 路径无前导斜杠');
 }
 
-// ---------- 结果 ----------
+
 console.log('\n--- 结果 ---');
 for (const l of fail) console.log(l);
 for (const l of pass) console.log(l);
