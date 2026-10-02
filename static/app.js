@@ -296,6 +296,8 @@ function confirmBox(msg, { okText = '确定', danger = false } = {}) {
     document.addEventListener('keydown', esc2); el.addEventListener('remove', () => document.removeEventListener('keydown', esc2));
   });
 }
+let MODAL_CLOSE = null;   
+function closeTopModal() { if (MODAL_CLOSE) { try { MODAL_CLOSE(); } catch { } } }
 function modal({ title, body = '', foot = '', wide = false, small = false, cls = '' }) {
   const root = $('#modal-root');
   root.innerHTML = `
@@ -307,7 +309,12 @@ function modal({ title, body = '', foot = '', wide = false, small = false, cls =
     </div>`;
   root.classList.add('open');
   const el = $('.modal', root);
-  const close = () => { root.classList.remove('open'); root.innerHTML = ''; el.dispatchEvent(new Event('remove')); };
+  const close = () => {
+    root.classList.remove('open'); root.innerHTML = '';
+    if (MODAL_CLOSE === close) MODAL_CLOSE = null;
+    el.dispatchEvent(new Event('remove'));
+  };
+  MODAL_CLOSE = close;
   $$('[data-close]', root).forEach(b => b.onclick = close);
   root.onclick = e => { if (e.target.classList.contains('mask')) close(); };
   return { el, close, root };
@@ -574,6 +581,22 @@ function attachSkuSearch(sel, opts) {
   });
   if (o.value) { box.value = o.value; filterSkuSelect(sel, box.value); }
   return box;
+}
+
+
+function skuPickByCode(sel, box, code) {
+  if (!sel) return { ok: false, hits: 0 };
+  const all = skuOptAll(sel).filter(o => o.value);
+  const q = String(code == null ? '' : code).trim().toLowerCase();
+  if (box) { box.value = code; box.dispatchEvent(new Event('input', { bubbles: true })); }
+  const exact = all.find(o => String(o.value) === q) || all.find(o => String(o.text).split('|')[0].trim().toLowerCase() === q);
+  const hits = all.filter(o => String(o.key || o.text).toLowerCase().includes(q));
+  const target = exact || (hits.length === 1 ? hits[0] : null);
+  if (!target) return { ok: false, hits: hits.length };
+  sel.value = target.value;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+  if (box) { box.value = ''; box.dispatchEvent(new Event('input', { bubbles: true })); }   
+  return { ok: true, how: exact ? 'exact' : 'one', label: target.text, hits: hits.length };
 }
 
 
@@ -1478,7 +1501,8 @@ function skuModal(id, after) {
     const { el, close } = modal({
       title: sku ? '编辑物资' : '新建物资', small: true,
       body: `<label class="field"><span class="lab">物资类别</span><select class="input" id="f-cat"><option value="">— 未设物资类别 —</option>${(cats || []).map(c => `<option value="${c.id}" ${sku && sku.category_id == c.id ? 'selected' : ''}>${esc(c.name)}${c.code ? ' (' + esc(c.code) + ')' : ''}</option>`).join('')}</select></label>
-    <label class="field"><span class="lab">物资编码 *</span><textarea rows="1" class="input auto" data-auto id="f-code" placeholder="如 M-0001" ${sku ? 'disabled' : ''}>${esc(sku ? sku.sku_code : '')}</textarea></label>
+    <label class="field"><span class="lab">物资编码 *</span><span style="display:flex;gap:6px"><textarea rows="1" class="input auto" style="flex:1;min-width:0" data-auto id="f-code" placeholder="如 M-0001" ${sku ? 'disabled' : ''}>${esc(sku ? sku.sku_code : '')}</textarea>${sku ? '' : '<button class="btn sm" type="button" id="f-code-scan" title="用摄像头扫物资编码 / 条码填入">📷</button>'}</span></label>
+    <div id="f-scan" style="margin:-4px 0 10px"></div>
     <label class="field"><span class="lab">物资名称 *</span><textarea rows="1" class="input auto" data-auto id="f-name" placeholder="如 USB-C 数据线">${esc(sku ? sku.name : '')}</textarea></label>
     <label class="field"><span class="lab">物资型号</span><textarea rows="1" class="input auto" data-auto id="f-spec" placeholder="型号 / 规格（可较长的文字，框随内容自动增高）">${esc(sku ? sku.spec : '')}</textarea></label>
     <label class="field"><span class="lab">存放位置</span><select class="input" id="f-loc"><option value="">— 未设存放位置 —</option>${(() => {
@@ -1510,6 +1534,18 @@ function skuModal(id, after) {
     
     const grow = ta => { ta.style.height = 'auto'; ta.style.height = Math.max(26, ta.scrollHeight) + 'px'; };
     $$('[data-auto]', el).forEach(ta => { ta.addEventListener('input', () => grow(ta)); grow(ta); });
+    
+    const fScan = $('#f-code-scan', el);
+    if (fScan) fScan.onclick = () => scanIntoField($('#f-scan', el), '#f-code', {
+      title: '扫物资编码', hint: '把物资标签上的<b>编码条码 / 二维码</b>对准摄像头，识别成功后自动填入「物资编码」。',
+      after: async code => {
+        try {
+          const rows = (await api('/api/skus?q=' + encodeURIComponent(code))) || [];
+          const hit = rows.find(s => String(s.sku_code || '').trim() === code);
+          if (hit) toast(`注意：编码 ${code} 已被「${hit.name}」占用，保存时可能重复`);
+        } catch { }
+      },
+    });
     let sn = snVal;
     const hint = $('#f-snhint', el);
     
@@ -2049,12 +2085,13 @@ function ioPaintLines(v, data) {
             ${skus.map(x => `<option value="${x.id}" data-k="${esc(skuOptKey(x))}" ${l.sku_id == x.id ? 'selected' : ''}>${esc(skuOptText(x))}</option>`).join('')}
           </select>
           ${s ? `<div class="hint">${String(s.kind || '') === 'med' ? '当前数量' : '当前库存'}：<b>${s.sn_managed ? s.sn_in : s.qty}</b> ${esc(s.unit || '')}${s.sn_managed ? ' · SN 管理' : ''}${s.med_batch ? ' · 批号 ' + esc(s.med_batch) : ''}</div>` : ''}
+          <div class="row-flex" style="margin-top:4px"><button class="btn sm" data-act="skuscan" title="用摄像头扫物资编码 / 条码，自动选中物资（找不到时用「物资管理」补登记）">📷 扫码选物资</button></div>
         </div>
         ${isSn && io.type === 'in' ? `<div class="grow newsn"><span class="lab">SN 序列号（每行一个，可扫码枪连续扫描；也可批量粘贴）</span>
             <textarea class="input mono" data-f="sntext" rows="6" placeholder="SN-1001&#10;SN-1002&#10;…">${esc(l.snText)}</textarea>
-            <div class="row-flex"><span class="tag" data-f="sncnt"></span><button class="btn sm" data-act="gen">批量生成</button><span class="tag">数量按 SN 个数自动计算</span></div></div>`
+            <div class="row-flex"><span class="tag" data-f="sncnt"></span><button class="btn sm" data-act="gen">批量生成</button><button class="btn sm" data-act="snscan" title="用摄像头连续扫码录入 SN：扫一个加一个，重复的自动跳过">📷 扫码录入 SN</button><span class="tag">数量按 SN 个数自动计算</span></div></div>`
         : isSn && io.type === 'out' ? `<div class="grow"><span class="lab">选择在库 SN（已选 <b data-f="selcnt">${l.sel.length}</b>）</span>
-            <div class="hint"><button class="btn sm" data-act="selsel">全选当前页</button> <button class="btn sm" data-act="selnone">清空</button> <input class="input" data-f="snsearch" style="width:180px;display:inline-block" placeholder="筛选SN…"></div>
+            <div class="hint"><button class="btn sm" data-act="selsel">全选当前页</button> <button class="btn sm" data-act="selnone">清空</button> <button class="btn sm" data-act="snscan" title="用摄像头扫 SN：在库的直接勾选">📷 扫码勾选</button> <input class="input" data-f="snsearch" style="width:180px;display:inline-block" placeholder="筛选SN…"></div>
             <div data-f="snlist" style="max-height:150px;overflow:auto;display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div></div>`
         : `<div style="width:170px"><span class="lab">数量</span><input class="input num" data-f="qty" type="number" min="1" value="${esc(l.qty)}" placeholder="0"></div>`}
         <div style="width:190px"><span class="lab">存放位置</span><input class="input" data-f="loc" list="io-loc-list" value="${esc(l.location || '')}" placeholder="自动带出物资库位"></div>
@@ -2075,6 +2112,16 @@ function ioPaintLines(v, data) {
         ioPaintLines(v, data);
       };
     }
+    const skuScanBtn = rowEl.querySelector('[data-act=skuscan]');
+    if (skuScanBtn) skuScanBtn.onclick = () => scanModal({
+      title: '扫码选物资', hint: '扫<b>物资编码</b>或<b>商品条码</b>，自动选中本行的物资（条码没登记过时会提示）。',
+      onCode: async code => {
+        const r = skuPickByCode(skuSelEl, rowEl.querySelector('.sku-search'), code);
+        if (!r.ok) toast(`没有找到编码 / 条码为「${code}」的物资，可先到「物资管理」补登记`, 'err');
+        else toast(`已选中：${r.label}`);
+        return true;
+      },
+    });
     const locEl = rowEl.querySelector('[data-f=loc]');
     if (locEl) locEl.oninput = e => l.location = e.target.value;
     const qtyEl = rowEl.querySelector('[data-f=qty]');
@@ -2083,6 +2130,29 @@ function ioPaintLines(v, data) {
     if (snText) {
       const upd = () => { const t = rowEl.querySelector('[data-f=sncnt]'); if (t) t.textContent = `已识别 ${io.countSn(l)} 个 SN`; l.snText = snText.value; };
       snText.oninput = upd; upd();
+      
+      const snScanBtn = rowEl.querySelector('[data-act=snscan]');
+      if (snScanBtn) snScanBtn.onclick = () => {
+        let n = 0;
+        scanModal({
+          title: '连续扫码录入 SN', closeOnHit: false,
+          hint: '对着 <b>SN 条码 / 二维码</b>扫：扫一个加一个，重复的自动跳过；录完点「关闭」。',
+          onCode: async code => {
+            const arr = String(l.snText || '').split(/[\s,;，；]+/).map(x => x.trim()).filter(Boolean);
+            if (arr.includes(code)) return false;   
+            l.snText = (String(l.snText || '').trim() ? String(l.snText).replace(/\s+$/, '') + '\n' : '') + code;
+            const ta2 = rowEl.querySelector('[data-f=sntext]');
+            if (ta2) {
+              ta2.value = l.snText;
+              const t = rowEl.querySelector('[data-f=sncnt]');
+              if (t) t.textContent = `已识别 ${io.countSn(l)} 个 SN`;
+            }
+            n++;
+            toast(`已添加第 ${n} 个 SN：${code}`);
+            return false;   
+          },
+        });
+      };
     }
     if (s && s.sn_managed && io.type === 'out') {
       const listEl = rowEl.querySelector('[data-f=snlist]');
@@ -2110,6 +2180,23 @@ function ioPaintLines(v, data) {
         renderSns(available); showCnt();
       };
       rowEl.querySelector('[data-act=selnone]').onclick = () => { l.sel = []; renderSns(available); showCnt(); };
+      
+      const outScanBtn = rowEl.querySelector('[data-act=snscan]');
+      if (outScanBtn) outScanBtn.onclick = () => {
+        let n = 0;
+        scanModal({
+          title: '扫码勾选出库 SN', closeOnHit: false,
+          hint: '对着<b>在库 SN</b> 的条码 / 二维码扫：命中就自动勾选；扫完点「关闭」。',
+          onCode: async code => {
+            if (!available.length) { toast('该物资当前没有在库 SN 可勾选', 'err'); return false; }
+            if (!available.includes(code)) { toast('该 SN 不在库 / 不属于本物资：' + code, 'err'); return false; }
+            if (l.sel.includes(code)) return false;   
+            l.sel.push(code); renderSns(available); showCnt(); n++;
+            toast(`已勾选第 ${n} 个：${code}`);
+            return false;
+          },
+        });
+      };
       api(`/api/sn?status=in&sku_id=${s.id}`).then(rows => { available = rows.map(r => r.sn); renderSns(available); }).catch(() => { available = []; renderSns(available); });
     }
     const gen = rowEl.querySelector('[data-act=gen]');
@@ -2298,7 +2385,7 @@ function qrImportFlow() {
       <button class="btn" id="qr-src-text">🔤 粘贴扫码枪文本</button>
     </div>
     <div id="qr-src-area" style="margin-top:12px"></div>
-    ${window.isSecureContext === false ? '<div class="badge orange" style="display:inline-block">⚠️ 当前为非 https / localhost 连接：手机端无法“实时扫码”，请用下方「📷 拍照 / 上传图片」扫码。</div>' : ''}
+    ${window.isSecureContext === false ? '<div class="badge orange" style="display:inline-block">⚠️ 当前为非 https / localhost 连接：手机端无法“实时扫码”，请用下方「📷 拍照 / 上传图片」扫码（或去 系统设置 → 桌面/网络 开启「HTTPS 访问」，再用 https://本机IP:端口 打开本页）。</div>' : ''}
     <div class="hint">手机 / 平板优先用<b>实时扫码</b>：把本系统导出的单据二维码对准摄像头即自动识别（无需按拍照键）。相机不可用时用拍照或粘贴文本；扫码枪通常以“键盘输入”出码，直接粘贴即可。<br><b>单据数据过大、二维码生不出来时</b>：由对方在单据处点「⬇ 导出入库文件(.json)」把文件发给你，用这里的<b>选择导入文件</b>导入即可（效果与扫码一致）。</div>`,
     foot: '<button class="btn" data-c>关闭</button>' });
   $$('[data-c]', el).forEach(x => x.onclick = close);
@@ -2339,91 +2426,371 @@ function qrImportFlow() {
   $('#qr-src-live', el).onclick = () => startLiveScan(el);
 }
 
-function startLiveScan(hostEl) {
-  const area = $('#qr-src-area', hostEl);
-  const hasNative = !!(window.BarcodeDetector);
-  const hasJsQR = !!(window.jsQR);
-  if (!hasNative && !hasJsQR) { area.innerHTML = '<div class="badge red">当前浏览器不支持实时扫码（无 BarcodeDetector / jsQR）。请改用“拍照 / 上传图片”或“粘贴文本”。</div>'; return; }
+
+
+
+
+
+
+
+
+const SCAN_1D_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'codabar', 'itf', 'data_matrix'];
+function scanCaps() { return { native: !!(window.BarcodeDetector), qr: !!(window.jsQR), one: !!(window.Barcode1D) }; }
+const SCAN_FMT_NAME = { qr_code: 'QR', ean_13: 'EAN-13', ean_8: 'EAN-8', upc_a: 'UPC-A', upc_e: 'UPC-E', code_128: 'CODE128', code_39: 'CODE-39', code_93: 'CODE-93', codabar: 'CODABAR', itf: 'ITF', data_matrix: 'DataMatrix' };
+function fmtName(f) { return SCAN_FMT_NAME[String(f || '').toLowerCase()] || String(f || '码'); }
+
+async function openCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('当前浏览器不支持摄像头（mediaDevices 不可用）');
+  const sup = navigator.mediaDevices.getSupportedConstraints ? navigator.mediaDevices.getSupportedConstraints() : {};
+  const video = { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } };
+  if (sup.focusMode) video.focusMode = 'continuous';           
+  return navigator.mediaDevices.getUserMedia({ video, audio: false });
+}
+
+async function tuneFocus(track) {
+  if (!track) return;
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  const adv = [];
+  if (caps.focusMode && caps.focusMode.indexOf && caps.focusMode.indexOf('continuous') >= 0) adv.push({ focusMode: 'continuous' });
+  if (caps.pointsOfInterest) adv.push({ pointsOfInterest: [{ x: 0.5, y: 0.5 }] });   
+  if (adv.length) { try { await track.applyConstraints({ advanced: adv }); } catch {  } }
+}
+
+async function nudgeFocus(track) {
+  if (!track) return;
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  try {
+    if (caps.focusMode && caps.focusMode.indexOf && caps.focusMode.indexOf('manual') >= 0) {
+      await track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: 0 }] });
+      await new Promise(r => setTimeout(r, 80));
+    }
+    await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+  } catch {  }
+}
+
+
+
+function renderScanBlocked(area, o) {
+  const opt = o || {};
+  area.innerHTML = `<div class="badge orange" style="display:inline-block;margin-bottom:8px">⚠️ 当前为<b>不安全连接</b>（非 https、非 localhost）——手机浏览器会禁止网页直接调起摄像头扫码。</div>
+    <div class="hint">原因：浏览器仅允许在 <b>https</b>（或 localhost）页面使用摄像头，经 <b>http://局域网IP</b> 打开时无法扫码。<br>
+      ① <b>改用拍照 / 上传图片</b>：调起手机系统相机，不受此限制、效果一致；<br>
+      ② 本机<b>已开启「HTTPS 访问」</b>时，可直接用 https 打开本页恢复扫码（自签名证书，首次点「高级 → 继续前往」）。</div>
+    <div class="row-flex" style="gap:8px;flex-wrap:wrap;justify-content:center">
+      ${opt.fallbackHtml || ''}
+      <button class="btn" id="scan-https-go" style="display:none" title="用 https 打开当前页面后再扫码（浏览器才允许用摄像头）">🔒 尝试用 https 打开扫码</button></div>
+    <div class="hint" id="scan-https-note" style="margin-top:6px" hidden></div>`;
+  if (opt.fallbackHtml && opt.onFallback) { const b = $('#scan-fallback', area); if (b) b.onclick = opt.onFallback; }
   
-  const secure = !!(window.isSecureContext);
-  if (!secure) {
-    area.innerHTML = `<div class="badge orange" style="display:inline-block;margin-bottom:8px">⚠️ 当前为<b>不安全连接</b>（非 https、非 localhost）——手机浏览器会禁止网页直接调起摄像头实时扫码。</div>
-      <div class="hint">原因：浏览器仅允许在 <b>https</b>（或 localhost）页面使用摄像头，经 <b>http://局域网IP</b> 打开时无法实时扫码。<br>解决办法：① 用下方「📷 拍照 / 上传图片」扫码——它调起<b>手机系统相机</b>，不受此限制、效果一致；② 或让本站以 <b>https</b>（内网反代 / 隧道）访问，即可恢复实时扫码。</div>
-      <button class="btn primary" id="qr-src-cam-fb">📷 改用拍照 / 上传图片扫码</button>`;
-    const fb = $('#qr-src-cam-fb', hostEl);
-    if (fb) fb.onclick = () => { const b = $('#qr-src-cam', hostEl); if (b) b.click(); };
-    return;
-  }
-  area.innerHTML = `<div class="hint" style="margin-bottom:8px">把<b>二维码</b>对准摄像头（尽量平贴、光线充足），识别成功后<b>自动预览</b>，无需按拍照键。${hasNative ? '系统扫码（BarcodeDetector）' : '内置解析（jsQR 兜底）'}。</div>
-    <video id="live-video" playsinline muted autoplay style="width:100%;max-height:340px;background:#000;border-radius:8px;object-fit:cover"></video>
-    <div class="row-flex" style="margin-top:6px;gap:8px;justify-content:center"><button class="btn sm" id="live-flash" style="display:none">🔦 开灯</button><span class="tag" id="live-stat"></span><button class="btn sm" id="live-stop">■ 停止扫码</button></div>`;
-  const video = $('#live-video', hostEl);
-  const stat = $('#live-stat', hostEl);
-  let stream = null, timer = null, stopped = false;
-  const stopAll = () => { stopped = true; clearInterval(timer); if (stream) stream.getTracks().forEach(t => t.stop()); };
-  $('#live-stop', hostEl).onclick = stopAll;
-  const onRaw = async raw => {
-    stopAll();
-    try {
-      const r = await api('/api/import/qr-text', { method: 'POST', body: JSON.stringify({ text: raw }) });
-      if (r && r.payload) qrReview(r);
-      else { toast('识别到内容，但不是有效单据', 'err'); area.innerHTML += '<div class="badge red" style="margin-top:8px;display:inline-block">识别内容不是本系统单据二维码，可点上方按钮重扫</div>'; }
-    } catch (e) { toast(e.message, 'err'); }
+  api('/api/https/info').then(d => {
+    const btn = $('#scan-https-go', area);
+    if (!btn || !d || !d.enable || !d.running) return;
+    const port = d.port || d.http_port || '';
+    const url = `https://${location.hostname}${port ? ':' + port : ''}${location.pathname}${location.search}${location.hash}`;
+    const note = $('#scan-https-note', area);
+    if (note) {
+      note.hidden = false;
+      note.innerHTML = `本机已开启 HTTPS：点上面第二个按钮会用 <b class="mono">https://${esc(location.hostname)}:${esc(String(port))}</b> 重新打开本页（数据与账号一致；https 的登录状态独立，需重新登录一次）。`;
+    }
+    btn.style.display = '';
+    btn.onclick = async () => {
+      const go = await confirmBox('将用 https 打开当前页面再扫码：' + url + '（首次会提示证书不受信任，点「高级 → 继续前往」即可；https 的登录状态是独立的，可能需要重新登录一次）', { okText: '用 https 打开' });
+      if (go) location.href = url;
+    };
+  }).catch(() => {  });
+}
+
+
+
+
+
+
+
+
+
+
+function cameraScanner(mountEl, opt) {
+  const o = opt || {};
+  const area = typeof mountEl === 'string' ? $(mountEl) : mountEl;
+  const ctl = { stop() { }, refocus() { } };
+  if (!area) return ctl;
+  const caps = scanCaps();
+  if (!caps.native && !caps.qr && !caps.one) { area.innerHTML = '<div class="badge red">当前浏览器不支持扫码（无 BarcodeDetector / jsQR / 一维码解码）。请改用“拍照 / 上传图片”或“粘贴文本”。</div>'; return ctl; }
+  if (!window.isSecureContext) { renderScanBlocked(area, o); return ctl; }   
+  const engine = caps.native ? '系统扫码（BarcodeDetector：二维码 + 一维码）' : '内置解析（jsQR 二维码 + Barcode1D 一维码）';
+  area.innerHTML = `<div class="hint" style="margin-bottom:8px">${o.hint || '把<b>二维码</b>或<b>一维条码</b>对准摄像头（尽量平贴、光线充足、别太远），识别成功后自动处理，无需按拍照键。'}<span class="muted" style="margin-left:6px">${engine}</span></div>
+    <video id="scan-video" playsinline muted autoplay style="width:100%;max-height:340px;background:#000;border-radius:8px;object-fit:cover"></video>
+    <div class="row-flex" style="margin-top:6px;gap:8px;justify-content:center;flex-wrap:wrap">
+      <button class="btn sm" id="scan-focus" title="画面糊 / 对不上焦时点这里；直接点画面也可以">🔍 重新对焦</button>
+      <button class="btn sm" id="scan-flash" style="display:none">🔦 开灯</button>
+      <span class="tag" id="scan-stat">启动中…</span>
+      <button class="btn sm" id="scan-stop">■ 停止扫码</button></div>
+    <div id="scan-extra" style="margin-top:8px"></div>`;
+  const video = $('#scan-video', area), stat = $('#scan-stat', area);
+  const cv2 = document.createElement('canvas'), cx2 = cv2.getContext('2d', { willReadFrequently: true });   
+  const cv1 = document.createElement('canvas'), cx1 = cv1.getContext('2d', { willReadFrequently: true });   
+  let stream = null, track = null, timer = null, det = null, stopped = false, busy = false, ticks = 0, lastHit = Date.now();
+  let lastCode = '', lastCodeAt = 0;   
+  const say = t => { if (stat) stat.textContent = t; };
+  const stop = () => {
+    if (!stopped) {
+      stopped = true; clearInterval(timer);
+      if (stream) stream.getTracks().forEach(t => t.stop());
+    }
+    if (o.onStop) { try { o.onStop(); } catch { } }
   };
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  (async () => {
+  ctl.stop = stop;
+  $('#scan-stop', area).onclick = stop;
+  const refocusNow = async () => { if (stopped) return; say('正在重新对焦…'); await nudgeFocus(track); lastHit = Date.now(); say('识别中…'); };
+  ctl.refocus = refocusNow;
+  $('#scan-focus', area).onclick = refocusNow;
+  video.onclick = refocusNow;
+  const grab = (cv, cx, maxW) => {
+    const vw = video.videoWidth || 0, vh = video.videoHeight || 0;
+    if (!vw || !vh) return null;
+    const w = Math.min(vw, maxW), h = Math.max(1, Math.round(vh * w / vw));
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    cx.drawImage(video, 0, 0, w, h);
+    return { w, h };
+  };
+  const hit = async (raw, fmt) => {
+    const code = String(raw == null ? '' : raw).trim();
+    if (!code || stopped || busy) return;
+    if (code === lastCode && Date.now() - lastCodeAt < 4000) return;   
+    lastCode = code; lastCodeAt = Date.now();
+    busy = true; lastHit = Date.now();
+    say(`识别到 ${fmt}，处理中…`);
+    let done = true;
+    try { done = (await o.onCode(code, fmt)) !== false; }
+    catch (e) { toast(e && e.message ? e.message : String(e), 'err'); }
+    finally {
+      busy = false;
+      if (done) stop();
+      else setTimeout(() => { lastHit = Date.now(); if (!stopped) say('识别中…'); }, 900);   
+    }
+  };
+  const tick = async () => {
+    if (stopped || busy || video.readyState < 2) return;
+    busy = true;
     try {
-      let det = null;
-      if (hasNative) det = new window.BarcodeDetector({ formats: ['qr_code'] });
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } });
-      video.srcObject = stream; await video.play();
-      if (stat) stat.textContent = '识别中…';
-      if (stream.getVideoTracks().length) {
-        const cap = stream.getVideoTracks()[0].getCapabilities ? stream.getVideoTracks()[0].getCapabilities() : {};
-        const flash = $('#live-flash', hostEl);
-        if (cap && cap.torch) {
-          flash.style.display = '';
-          flash.onclick = () => {
-            try {
-              const t = stream.getVideoTracks()[0];
-              flash.dataset.on = flash.dataset.on ? '' : '1';
-              t.applyConstraints({ advanced: [{ torch: !!flash.dataset.on }] });
-              flash.textContent = flash.dataset.on ? '🔦 关灯' : '🔦 开灯';
-            } catch {}
-          };
+      ticks++;
+      if (det) {                                                                     
+        const codes = await det.detect(video);
+        if (codes && codes.length && codes[0].rawValue) { const c = codes[0]; busy = false; await hit(c.rawValue, fmtName(c.format)); return; }
+      } else if (caps.qr) {
+        const g = grab(cv2, cx2, 640);
+        if (g) {
+          const img = cx2.getImageData(0, 0, g.w, g.h);
+          const code = window.jsQR(img.data, g.w, g.h, { inversionAttempts: 'dontInvert' });
+          if (code && code.data) { busy = false; await hit(code.data, 'QR'); return; }
         }
       }
-      let busy = false;
-      const tick = async () => {
-        if (stopped || busy || video.readyState < 2) return;
-        busy = true;
+      if (caps.one && ticks % 2 === 0) {                                             
+        const g = grab(cv1, cx1, 1280);
+        if (g) {
+          const img = cx1.getImageData(0, 0, g.w, g.h);
+          const list = window.Barcode1D.decode(img, g.w, g.h, { vertical: ticks % 6 === 0 });
+          if (list.length) { busy = false; await hit(list[0].value, list[0].format); return; }
+        }
+      }
+    } catch {  }
+    finally {
+      busy = false;
+      if (!stopped && Date.now() - lastHit > 4000) refocusNow();                      
+    }
+  };
+  (async () => {
+    try {
+      stream = await openCamera();
+      video.srcObject = stream; await video.play();
+      track = stream.getVideoTracks()[0] || null;
+      await tuneFocus(track);
+      const caps2 = (track && track.getCapabilities) ? track.getCapabilities() : {};
+      const flash = $('#scan-flash', area);
+      if (caps2 && caps2.torch) {
+        flash.style.display = '';
+        flash.onclick = () => {
+          try {
+            flash.dataset.on = flash.dataset.on ? '' : '1';
+            track.applyConstraints({ advanced: [{ torch: !!flash.dataset.on }] });
+            flash.textContent = flash.dataset.on ? '🔦 关灯' : '🔦 开灯';
+          } catch {  }
+        };
+      }
+      if (caps.native) {
         try {
-          if (det) {
-            const codes = await det.detect(video);
-            if (codes && codes.length && codes[0].rawValue) { onRaw(codes[0].rawValue); return; }
-          } else {
-            const vw = video.videoWidth || 0, vh = video.videoHeight || 0;
-            if (vw && vh) {
-              const w = Math.min(vw, 640), h = Math.round(vh * w / vw);
-              canvas.width = w; canvas.height = h;
-              ctx.drawImage(video, 0, 0, w, h);
-              const img = ctx.getImageData(0, 0, w, h);
-              const code = window.jsQR(img.data, w, h, { inversionAttempts: 'dontInvert' });
-              if (code && code.data) { onRaw(code.data); return; }
-            }
-          }
-        } catch {  }
-        finally { busy = false; }
-      };
-      timer = setInterval(tick, hasNative ? 320 : 240);
+          let fmts = ['qr_code'];
+          try {
+            const sup = await window.BarcodeDetector.getSupportedFormats();
+            if (Array.isArray(sup)) fmts = ['qr_code'].concat(SCAN_1D_FORMATS.filter(f => sup.indexOf(f) >= 0));
+          } catch {  }
+          det = new window.BarcodeDetector({ formats: fmts });
+          if (!det || typeof det.detect !== 'function') det = null;
+        } catch { det = null; }
+      }
+      say('识别中…');
+      lastHit = Date.now();
+      timer = setInterval(tick, det ? 300 : 200);
     } catch (e) {
-      stopAll();
-      toast('无法调用摄像头：' + (e && e.message ? e.message : String(e)) + (secure
-        ? '（当前已满足 https / localhost，请在浏览器或手机设置中允许“摄像头/相机”权限后再试；也可改用“拍照/上传图片”扫码）'
-        : '（当前为非 https / 非 localhost 的不安全连接，浏览器禁止网页调起摄像头；请改用“拍照/上传图片”扫码，或让本站通过 https 访问后即可实时扫码）'), 'err');
+      stop();
+      const msg = '无法调用摄像头：' + (e && e.message ? e.message : String(e));
+      if (o.onError) o.onError(e, msg);
+      else toast(msg + '（当前已满足 https / localhost，请在浏览器或手机设置中允许“摄像头/相机”权限后再试）', 'err');
     }
   })();
+  return ctl;
+}
+
+async function decodeImageFile(file) {
+  try {
+    const bmp = await createImageBitmap(file);
+    const long = Math.max(bmp.width || 0, bmp.height || 0) || 1;
+    const k = Math.min(1, 1600 / long);
+    const w = Math.max(1, Math.round((bmp.width || 1) * k)), h = Math.max(1, Math.round((bmp.height || 1) * k));
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const cx = cv.getContext('2d', { willReadFrequently: true });
+    cx.drawImage(bmp, 0, 0, w, h);
+    try { bmp.close && bmp.close(); } catch { }
+    const img = cx.getImageData(0, 0, w, h);
+    if (window.Barcode1D) {
+      const list = window.Barcode1D.decode(img, w, h, { vertical: true, rows: 40 });
+      if (list.length) return { value: list[0].value, format: list[0].format };
+    }
+    if (window.jsQR) {
+      const code = window.jsQR(img.data, w, h, { inversionAttempts: 'dontInvert' });
+      if (code && code.data) return { value: code.data, format: 'QR' };
+    }
+  } catch {  }
+  return null;
+}
+
+function codePanel(box, code, fmt, opt) {
+  const o = opt || {};
+  if (!box) return;
+  box.innerHTML = `<div class="card" style="box-shadow:none">
+    <div class="row-flex" style="gap:8px;flex-wrap:wrap;align-items:center"><span class="badge cyan">${esc(fmt || '条码')}</span><b class="mono" style="word-break:break-all">${esc(code)}</b></div>
+    ${o.note ? `<div class="hint" style="margin-top:6px">${esc(o.note)}</div>` : ''}
+    <div class="row-flex" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn sm" id="cp-copy">📋 复制</button>
+      <button class="btn sm" id="cp-find">🔍 查物资 / 药品</button>
+      ${o.again ? '<button class="btn sm" id="cp-again">▶ 继续扫码</button>' : ''}
+      ${o.fill ? '<button class="btn sm primary" id="cp-fill">✅ 就用这个</button>' : ''}</div>
+    <div id="cp-out" style="margin-top:8px"></div></div>`;
+  $('#cp-copy', box).onclick = () => copyText(code);
+  $('#cp-find', box).onclick = () => renderCodeMatches($('#cp-out', box), code);
+  if (o.again) $('#cp-again', box).onclick = o.again;
+  if (o.fill) $('#cp-fill', box).onclick = () => o.fill(code, fmt);
+}
+
+async function renderCodeMatches(out, code) {
+  if (!out) return;
+  out.innerHTML = '<div class="muted" style="font-size:12px">查询中…</div>';
+  const q = String(code == null ? '' : code).trim().toLowerCase();
+  const hitText = (row, fields) => fields.some(f => String(row[f] == null ? '' : row[f]).toLowerCase().includes(q));
+  let skus = [], meds = [];
+  
+  try {
+    const rows = (await api('/api/stock')) || [];
+    skus = rows.filter(s => hitText(s, ['sku_code', 'name', 'spec', 'location', 'unit'])).slice(0, 12);
+  } catch { }
+  try { meds = ((await api('/api/medicines?q=' + encodeURIComponent(code))) || []).slice(0, 12); } catch { }
+  if (!skus.length && !meds.length) {
+    out.innerHTML = `<div class="hint">本机没有匹配「<b class="mono">${esc(code)}</b>」的物资 / 药品。可在「物资管理」里把编码 / 商品条码登记上，或换一个码重扫。</div>`;
+    return;
+  }
+  out.innerHTML = `
+    ${skus.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>类型</th><th>物资编码</th><th>名称</th><th>型号</th><th class="num">库存</th><th>位置</th><th style="width:150px">操作</th></tr></thead><tbody>
+      ${skus.map(s => `<tr><td>${s.sn_managed ? '<span class="badge cyan">SN</span>' : '数量'}</td><td class="mono">${esc(s.sku_code || '')}</td><td><b>${esc(s.name || '')}</b></td><td class="muted">${esc(s.spec || '')}</td><td class="num">${s.sn_managed ? (s.sn_in || 0) : (s.qty || 0)}</td><td class="muted">${esc(s.location || '')}</td>
+        <td><button class="btn sm" data-in="${s.id}">📥 入库</button> <button class="btn sm" data-out="${s.id}">📤 出库</button></td></tr>`).join('')}</tbody></table></div>` : ''}
+    ${meds.length ? `<div class="tbl-wrap" style="margin-top:8px"><table class="tbl"><thead><tr><th>药品</th><th>物资编码</th><th>规格型号</th><th>产品批号</th><th>商品条码</th><th>追溯码</th><th class="num">数量</th></tr></thead><tbody>
+      ${meds.map(m => `<tr><td><b>${esc(m.name || '')}</b></td><td class="mono">${esc(m.mcode || '')}</td><td class="muted">${esc(m.spec || '')}</td><td class="mono">${esc(m.batch || '')}</td><td class="mono">${esc(m.barcode || '')}</td><td class="mono">${esc(m.code || '')}</td><td class="num">${m.qty || 0}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    <div class="hint" style="margin-top:6px">物资可直接点「入库 / 出库」建单（会跳到出入库页并自动选中该物资）；药品的出入库请到「出入库」页按药品名办理。</div>`;
+  $$('[data-in]', out).forEach(b => b.onclick = () => gotoDoc('in', Number(b.dataset.in)));
+  $$('[data-out]', out).forEach(b => b.onclick = () => gotoDoc('out', Number(b.dataset.out)));
+}
+
+async function gotoDoc(kind, id) {
+  try { if (!state.skus.length) await getSkus(); } catch { }
+  closeTopModal();
+  openDoc(kind, id);
+}
+
+function scanModal(opt) {
+  const o = opt || {};
+  const { el, close } = modal({ title: o.title || '扫码', small: true, body: '<div id="sm-area"></div>', foot: '<button class="btn" data-c>关闭</button>' });
+  const photo = async () => {
+    const f = await pickImage(); if (!f) return;
+    const hide = loadingBox('识别中…');
+    let found;
+    try { found = await decodeImageFile(f); } finally { hide(); }
+    if (!found) { toast('没识别到条码：靠近一点 / 光足一点再拍一张', 'err'); return; }
+    st.stop();
+    await o.onCode(found.value, found.format);
+    close();
+  };
+  const st = cameraScanner($('#sm-area', el), {
+    hint: o.hint,
+    fallbackHtml: '<button class="btn" id="scan-fallback">📷 改用拍照 / 上传图片扫码</button>',
+    onFallback: photo,
+    onCode: async (raw, fmt) => {
+      const r = await o.onCode(raw, fmt);
+      if (r !== false && o.closeOnHit !== false) close();   
+      return r;
+    },
+    onError: (e, msg) => {
+      $('#sm-area', el).innerHTML = `<div class="badge orange" style="display:inline-block;margin-bottom:8px">${esc(msg)}</div>
+        <div class="hint">① 手机浏览器里请允许“摄像头 / 相机”权限；② 页面必须是 https 或 localhost；③ 也可以直接用下面这个按钮拍照扫码。</div>
+        <button class="btn primary" id="scan-fallback">📷 改用拍照 / 上传图片扫码</button>`;
+      const b = $('#scan-fallback', el); if (b) b.onclick = photo;
+    },
+  });
+  const bye = () => { st.stop(); close(); };
+  $$('[data-c]', el).forEach(x => x.onclick = bye);
+  el.addEventListener('remove', () => { try { st.stop(); } catch { } });
+  return st;
+}
+
+function scanIntoField(mountEl, target, opt) {
+  const o = opt || {};
+  const mount = typeof mountEl === 'string' ? $(mountEl) : mountEl;
+  const t = typeof target === 'string' ? $(target) : target;
+  if (!mount || !t) return;
+  if (mount.dataset.scanning === '1') { mount.dataset.scanning = ''; mount.innerHTML = ''; return; }   
+  mount.dataset.scanning = '1';
+  cameraScanner(mount, {
+    hint: o.hint,
+    onStop: () => { mount.dataset.scanning = ''; mount.innerHTML = ''; },
+    onCode: async (raw, fmt) => {
+      t.value = raw;
+      t.dispatchEvent(new Event('input', { bubbles: true }));
+      toast(`已扫到 ${fmt}：${raw}`);
+      if (o.after) { try { await o.after(raw, fmt); } catch { } }
+      return true;
+    },
+  });
+}
+
+function startLiveScan(hostEl) {
+  const area = $('#qr-src-area', hostEl);
+  cameraScanner(area, {
+    hint: '把<b>单据二维码</b>对准摄像头（尽量平贴、光线充足），识别成功后自动预览，无需按拍照键；<b>一维条码</b>（商品条码 / 追溯码）也能识别。',
+    fallbackHtml: '<button class="btn primary" id="scan-fallback">📷 改用拍照 / 上传图片扫码</button>',
+    onFallback: () => { const b = $('#qr-src-cam', hostEl); if (b) b.click(); },
+    onCode: async (raw, fmt) => {
+      if (fmt !== 'QR') {          
+        codePanel($('#scan-extra', area), raw, fmt, { note: '这是一维条码内容，不是单据二维码。' });
+        return false;
+      }
+      try {
+        const r = await api('/api/import/qr-text', { method: 'POST', body: JSON.stringify({ text: raw }) });
+        if (r && r.payload) { qrReview(r); return true; }
+        codePanel($('#scan-extra', area), raw, fmt, { note: '识别到二维码内容，但不是本系统的单据二维码。' });
+      } catch (e) {
+        codePanel($('#scan-extra', area), raw, fmt, { note: (e && e.message) ? e.message : '识别到内容，但不是有效单据。' });
+      }
+      return false;
+    },
+  });
 }
 function qrReview(r) {
   const t = TYPE_META[r.payload.type] || {};
@@ -3422,7 +3789,7 @@ const ABOUT_CFG = {
     started: '2026-09',
     
     tokensEstimate: '1,181,464,440 tokens',
-    milestone: 'V0.0.0 → V0.11.0',
+    milestone: 'V0.0.0 → V0.11.1',
   },
 };
 
@@ -4300,12 +4667,16 @@ function desktopBody(body) {
   const isAdminLogged = currentIsAdmin();
   const lockHint = a.mode === 'login' ? '当前登录账号不是管理员，无法修改桌面设置。' : '当前为开放模式（未启用登录）。桌面设置需管理员账号登录后再修改。';
   const paint = async () => {
-    let info = null;
-    try { info = await api('/api/desktop/info'); } catch { info = null; }
+    let info = null, hs = null;
+    try {
+      const r = await Promise.all([api('/api/desktop/info'), api('/api/https/info').catch(() => null)]);
+      info = r[0]; hs = r[1];
+    } catch { info = null; }
     if (!info) {
       body.innerHTML = `<div class="card"><div class="card-body"><div class="badge red">读取桌面/网络信息失败（接口不可用？）</div></div></div>`;
       return;
     }
+    if (!hs) hs = { enable: false, port: 3443, running: false, urls: [], cert: null, on_https: false };
     const desktop = !!info.desktop;
     const on = !!(info.autostart && info.autostart.enabled);
     
@@ -4313,6 +4684,20 @@ function desktopBody(body) {
     const srcName = SRC_NAME[info.data_dir_source] || '运行配置 / 默认位置';
     const canMigrate = info.can_migrate !== false;
     const fromEnv = info.data_dir_source === 'env' || info.data_dir_source === 'instance';
+    
+    const hp = Number(hs.port) || 3443;
+    const hsOn = !!hs.enable, hsRun = !!hs.running;
+    const hsUrls = Array.isArray(hs.urls) ? hs.urls : [];
+    const hcert = hs.cert || null;
+    const hsShared = hs.shared !== false;                                              
+    const hsEffPort = Number(hs.port) || (hsShared ? (Number(hs.http_port) || 3200) : 3443);
+    const hsHttpPort = Number(hs.http_port) || 3200;
+    const hsAddrHtml = hsUrls.length
+      ? `<div class="row-flex" style="gap:6px;flex-wrap:wrap;margin-top:4px">${hsUrls.map(u => `<span class="row-flex" style="gap:4px;align-items:center"><span class="tag mono">${esc(u)}</span><button class="btn sm ghost hs-copy" type="button" data-u="${esc(u)}">复制</button></span>`).join('')}</div>`
+      : '<div class="muted" style="font-size:12px;margin-top:4px">未检测到局域网 IPv4 地址（本机只有回环地址时，局域网设备无法访问）</div>';
+    const hsCertHtml = hcert
+      ? `<div class="muted" style="font-size:12px;margin-top:6px">证书：${esc(hcert.subject || '')}｜有效期至 ${esc(String(hcert.not_after || '').slice(0, 16))}（剩余 ${hcert.days_left} 天）｜已覆盖 ${(hcert.sans || []).length} 个地址名；证书与私钥存在数据目录的 <span class="mono">https/</span> 下，升级或换版本都不会被覆盖。</div>`
+      : '';
     body.innerHTML = `<div class="card"><div class="card-body" style="max-width:720px">
       <h3 style="margin:0 0 8px">🖥 桌面 / 网络（Windows 安装版）</h3>
       <div class="hint" style="margin-bottom:12px">以下能力服务于<b>Windows 安装版</b>（安装为系统服务 + 托盘守护，随装随用、默认监听 <b>0.0.0.0:3200</b>）；在开发 / Web 直跑模式下仅展示信息，部分操作需安装版环境。</div>
@@ -4332,6 +4717,27 @@ function desktopBody(body) {
         <button class="btn primary" id="ds-listen-save" ${isAdminLogged ? '' : 'disabled'}>保存监听设置</button>
       </div>
       <div class="hint" style="margin-top:8px">端口以你填写为准（1–65535）；<b>无论监听地址怎么设置，127.0.0.1 回环都由程序固定监听</b>，本机永远可通过 <span class="mono">http://127.0.0.1:${Number((info.listen || {}).port) || 3200}</span> 进入，避免配置后把自己锁在外面。保存后需重启程序生效（安装版由桌面守护自动重启；开发 / Web 直跑模式请手动重启）。</div>
+      <div style="border-top:1px dashed var(--divider);margin:12px 0"></div>
+      <div class="row-flex" style="gap:12px;align-items:center;flex-wrap:wrap">
+        <div class="grow" style="min-width:260px"><b>HTTPS 访问（局域网手机调用摄像头 / 实时扫码）</b>
+          <div class="muted" style="font-size:12px">浏览器只在 <b>HTTPS</b>（或 localhost）页面才允许网页调用摄像头：局域网里用 http:// 打开时，手机端「实时扫码」无法调起摄像头。开启后可用 <span class="mono">https://本机IP:${hsEffPort}</span> 访问（自签名证书，浏览器首次会提示「继续前往」）。<b>默认与 HTTP 共用同一个端口</b> —— 同一端口既能用 http 也能用 https，托盘「打开面板」、桌面 / 开始菜单快捷方式、多仓互联都照旧走 http，互不影响。</div>
+        </div>
+        <button class="sw ${hsOn ? 'on' : ''}" id="hs-enable" data-on="${hsOn ? '1' : '0'}" ${isAdminLogged ? '' : 'disabled'} title="${isAdminLogged ? (hsOn ? '点击关闭 HTTPS 访问' : '点击开启 HTTPS 访问') : '需管理员登录'}"></button>
+      </div>
+      <div class="row-flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:8px">
+        <label class="check" style="margin:0 6px 8px 0"><input type="checkbox" id="hs-share" ${hsShared ? 'checked' : ''} ${isAdminLogged ? '' : 'disabled'}> 与 HTTP 端口共用（推荐）</label>
+        <label class="field" style="width:170px;margin:0"><span class="lab">HTTPS 端口${hsShared ? '（同 HTTP 端口）' : '（独立端口）'}</span><input class="input" id="hs-port" type="number" min="1" max="65535" value="${hsShared ? hsHttpPort : hsEffPort}" ${(isAdminLogged && !hsShared) ? '' : 'disabled'}></label>
+        <button class="btn primary" id="hs-save" ${isAdminLogged ? '' : 'disabled'}>保存</button>
+        <button class="btn" id="hs-regen" ${isAdminLogged ? '' : 'disabled'} title="重新生成自签名证书（含当前主机名与全部本机 IP）">🔄 重新生成证书</button>
+        <button class="btn" id="hs-fw" ${(isAdminLogged && hsOn) ? '' : 'disabled'} title="放行该端口的 Windows 防火墙入站规则（安装版服务模式一般可直接成功）">🛡 放行防火墙端口</button>
+        ${hs.on_https ? '<span class="badge green">当前已通过 HTTPS 访问</span>' : ''}
+      </div>
+      ${hsOn
+        ? (hsRun
+          ? `<div class="hint" style="margin-top:8px"><span class="badge green">运行中</span>${hsShared ? `（与 HTTP 共用 <b>${hsHttpPort}</b> 端口）` : `（独立端口 ${hsEffPort}）`} 手机 / 平板用下面任一地址访问即可实时扫码（与 HTTP 的账号 / 数据完全一致）：</div>${hsAddrHtml}${hsCertHtml}`
+          : `<div class="hint" style="margin-top:8px"><span class="badge red">未运行</span>${hs.error ? ' ' + esc(hs.error) : ''} —— 可换个端口再保存；HTTP 访问不受影响。</div>`)
+        : `<div class="hint" style="margin-top:8px">未开启。手机端仍可用「📷 拍照 / 上传图片」扫码（调起系统相机，不受此限制）；需要「实时扫码」就开启本项，并用 https 地址打开。</div>`}
+      <div class="hint" style="margin-top:6px">说明：证书是自动生成的自签名证书（SAN 含主机名与所有本机 IP），浏览器会提示「不安全」—— 点<b>高级 → 继续前往</b>即可；仅局域网内使用，不会上传任何信息。本机 IP 变化或证书临近过期时会自动重新生成。手机若仍连不上，点「🛡 放行防火墙端口」放行端口。若确实想让 HTTPS 用单独端口（如 443），取消勾选「与 HTTP 端口共用」再填端口即可。</div>
       <div style="border-top:1px dashed var(--divider);margin:12px 0"></div>
       <div class="row-flex" style="gap:12px;align-items:center">
         <div class="grow"><b>开机自启</b><div class="muted" style="font-size:12px">${desktop ? '安装为 Windows 服务（ThingsManager）后，开机是否自动启动后台服务；改服务启动类型需管理员。' : '安装版（服务）环境中可用；当前模式只读。'}</div></div>
@@ -4366,6 +4772,61 @@ function desktopBody(body) {
         paint();
       } catch (e) { toast(e.message, 'err'); }
     };
+    
+    const hsForm = () => {
+      const sh = $('#hs-share', body);
+      const shared = sh ? sh.checked : hsShared;
+      const pi = $('#hs-port', body);
+      let port = pi ? parseInt(pi.value, 10) : hsEffPort;
+      if (!port || port < 1 || port > 65535) port = hsEffPort;
+      return { shared, port };
+    };
+    const hsPost = async (p, payload) => {
+      try {
+        const hide = loadingBox('处理中…');
+        let r; try { r = await api(p, { method: 'POST', body: JSON.stringify(payload || {}) }); } finally { hide(); }
+        if (r && r.note) toast(r.note, r.error ? 'err' : 'ok');
+        return r;
+      } catch (e) { toast(e.message, 'err'); return null; }
+    };
+    const hsSh = $('#hs-share', body);
+    if (hsSh && !hsSh.disabled) hsSh.onchange = () => {
+      const pi = $('#hs-port', body);
+      if (!pi) return;
+      pi.disabled = hsSh.checked;
+      if (hsSh.checked) pi.value = hsHttpPort;      
+      paint();                                      
+    };
+    const hsEn = $('#hs-enable', body);
+    if (hsEn && !hsEn.disabled) hsEn.onclick = async () => {
+      const target = !(hsEn.dataset.on === '1');
+      hsEn.dataset.on = target ? '1' : '0';
+      hsEn.classList.toggle('on', target);
+      await hsPost('/api/https/config', { enable: target, ...hsForm() });
+      paint();
+    };
+    const hsSave = $('#hs-save', body);
+    if (hsSave && !hsSave.disabled) hsSave.onclick = async () => {
+      const f = hsForm();
+      if (!f.shared && (!f.port || f.port < 1 || f.port > 65535)) return toast('端口需为 1–65535 的整数', 'err');
+      await hsPost('/api/https/config', { enable: hsOn, ...f });
+      paint();
+    };
+    const hsRe = $('#hs-regen', body);
+    if (hsRe && !hsRe.disabled) hsRe.onclick = async () => {
+      await hsPost('/api/https/regen', {});
+      paint();
+    };
+    const hsFw = $('#hs-fw', body);
+    if (hsFw && !hsFw.disabled) hsFw.onclick = async () => {
+      let r = null;
+      try {
+        const hide = loadingBox('正在放行防火墙…');
+        try { r = await api('/api/https/firewall', { method: 'POST', body: '{}' }); } finally { hide(); }
+      } catch (e) { toast(e.message, 'err'); }
+      if (r) { if (r.ok) toast(r.note || '已放行'); else toast((r.note || '放行失败') + (r.cmd ? '：' + r.cmd : ''), 'err'); }
+    };
+    $$('.hs-copy', body).forEach(b => b.onclick = () => copyText(b.dataset.u));
     const sw = $('#ds-auto', body);
     if (sw && !sw.disabled) sw.onclick = async () => {
       const target = !(sw.dataset.on === '1');
@@ -4426,7 +4887,8 @@ function mailBody(body) {
     let d = null; try { d = await api('/api/mail/logs?days=14'); } catch { return; }
     if (!d) return;
     const DAY = { sent: ['green', '已发送'], empty: ['blue', '已检查'], failed: ['red', '失败'], pending: ['orange', '今日待发'], missed: ['red', '漏发'], none: ['gray', '未启用'], idle: ['gray', '未到期'] };
-    const chip = x => { const c = DAY[x.status] || ['gray', x.label]; return `<span class="badge ${c[0]}" title="${esc(x.day)} · ${esc(x.label)}">${x.day.slice(5)} ${c[1]}</span>`; };
+    const BYSUF = { boot: '·补发', resend: '·补发', due: '·档位', manual: '·手动' };
+    const chip = x => { const c = DAY[x.status] || ['gray', x.label]; const suf = (x.status === 'sent' && x.by && BYSUF[x.by]) ? BYSUF[x.by] : ''; return `<span class="badge ${c[0]}" title="${esc(x.day)} · ${esc(x.label)}">${x.day.slice(5)} ${c[1]}${suf}</span>`; };
     box.innerHTML = `<div style="border-top:1px dashed #dfe5ec;margin:14px 0 10px"></div>
       <h4 style="margin:0 0 4px">发送 / 漏发记录（近 14 天）</h4>
       <div style="margin:8px 0 10px;line-height:2.2">${(d.days || []).map(chip).join(' ')}</div>
@@ -4437,7 +4899,7 @@ function mailBody(body) {
         <td><span class="badge ${(ST[l.status] || ['gray', ''])[0]}">${(ST[l.status] || ['gray', l.status])[1]}</span></td>
         <td class="num">${l.items || '—'}</td><td class="muted">${esc(l.msg || '')}</td></tr>`).join('')
         || '<tr><td colspan="6"><div class="empty"><div class="big">📭</div>暂无发送记录。定时 / 启动补发 / 手动发送与漏发检查都会在此数据库留档。</div></td></tr>'}</tbody></table>
-      <div class="hint" style="margin-top:6px">每天执行时刻自动检查并<b>在数据库留档</b>；“周期提醒”按间隔到期发送汇总（含 90 天内临期/过期/借用超期），触发方式显示为 定时/启动补发；“档位提醒”对每件到期物按其提前档位各提醒一次，触发方式显示为 档位。服务器启动时读取记录，已过执行时刻仍无对应记录才补发并留档；未到点或已发则不补。红色“漏发”= 应提醒当天却无记录（若已用手工补发会显示“已手工补发”）；灰色“未到期”= 不在间隔应发日。</div>`;
+      <div class="hint" style="margin-top:6px">每天执行时刻自动检查并<b>在数据库留档</b>；“周期提醒”按间隔到期发送汇总（含 90 天内临期/过期/借用超期），触发方式显示为 定时/启动补发；“档位提醒”对每件到期物按其提前档位各提醒一次，触发方式显示为 档位。<b>判定口径</b>：只要当天<b>成功发出过任意一封邮件</b>（周期汇总 / 档位提醒 / 手动发送 / 手工补发）就算“已发送”，不再显示漏发；红色“漏发”= 当天应提醒却<b>一封都没发出去</b>；灰色“未到期”= 不在间隔应发日。服务器启动时读取记录，已过执行时刻仍无记录才补发并留档。</div>`;
   };
   const save = async () => {
     try {
@@ -5478,9 +5940,10 @@ function medicineModal(item, after, opts) {
       <div class="split"><label class="field"><span class="lab">物资编码</span><input class="input mono" id="md-mcode" value="${esc(item ? item.mcode : '')}" placeholder="药品自己的物资编码（不进物资管理）"></label>
       <label class="field"><span class="lab">产品批号</span><input class="input mono" id="md-batch" value="${esc(item ? item.batch : '')}" placeholder="如 240315A"></label></div>
       <div class="split"><label class="field"><span class="lab">数量（可手改）</span><input class="input num" type="number" min="0" id="md-qty" value="${item ? Number(item.stock_qty || 0) : 0}"></label>
-      <label class="field"><span class="lab">商品条码（69 码）</span><span style="display:flex;gap:6px"><input class="input mono" id="md-bar" value="${esc(item ? item.barcode : '')}" placeholder="如 6901234567892"><button class="btn sm" type="button" id="md-bar-view" title="预览一维码">▥</button></span></label></div>
-      <div class="split"><label class="field"><span class="lab">药品追溯码</span><span style="display:flex;gap:6px"><input class="input mono" id="md-code" value="${esc(item ? item.code : '')}" placeholder="使用支付宝扫描"><button class="btn sm" type="button" id="md-code-view" title="预览一维码">▥</button></span></label>
+      <label class="field"><span class="lab">商品条码（69 码）</span><span style="display:flex;gap:6px"><input class="input mono" id="md-bar" value="${esc(item ? item.barcode : '')}" placeholder="如 6901234567892"><button class="btn sm" type="button" id="md-bar-scan" title="用摄像头扫商品条码填入（69 码 / EAN-13）">📷</button><button class="btn sm" type="button" id="md-bar-view" title="预览一维码">▥</button></span></label></div>
+      <div class="split"><label class="field"><span class="lab">药品追溯码</span><span style="display:flex;gap:6px"><input class="input mono" id="md-code" value="${esc(item ? item.code : '')}" placeholder="使用支付宝扫描"><button class="btn sm" type="button" id="md-code-scan" title="用摄像头扫追溯码填入（一维码 / 二维码都可）">📷</button><button class="btn sm" type="button" id="md-code-view" title="预览一维码">▥</button></span></label>
       <label class="field"><span class="lab">备注</span><input class="input" id="md-rmk" value="${esc(item ? item.remark : '')}"></label></div>
+      <div id="md-scan" style="margin:-4px 0 10px"></div>
       <div id="md-bc" style="margin:-4px 0 10px"></div>
       <div class="split"><label class="field"><span class="lab">生产日期</span><input class="input" type="date" id="md-prod" value="${esc(item ? item.prod_date : '')}"></label>
       <label class="field"><span class="lab">有效期 *</span><input class="input" type="date" id="md-exp" value="${esc(item ? item.expire_date : '')}"></label></div>
@@ -5501,6 +5964,20 @@ function medicineModal(item, after, opts) {
   };
   $('#md-bar-view', el).onclick = () => showBc('#md-bar', '商品条码');
   $('#md-code-view', el).onclick = () => showBc('#md-code', '药品追溯码');
+  
+  $('#md-bar-scan', el).onclick = () => scanIntoField($('#md-scan', el), '#md-bar', {
+    title: '扫商品条码', hint: '把包装上的<b>商品条码（69 码 / EAN-13）</b>对准摄像头，识别成功后自动填入「商品条码」。',
+    after: async code => {
+      try {
+        const rows = (await api('/api/medicines?q=' + encodeURIComponent(code))) || [];
+        const hit = rows.find(m => String(m.barcode || '').trim() === code);
+        if (hit) toast(`注意：该商品条码已被「${hit.name}（批号 ${hit.batch || '-'}）」使用`);
+      } catch { }
+    },
+  });
+  $('#md-code-scan', el).onclick = () => scanIntoField($('#md-scan', el), '#md-code', {
+    title: '扫药品追溯码', hint: '把药盒上的<b>追溯码</b>（一维条码或二维码）对准摄像头，识别成功后自动填入「药品追溯码」。',
+  });
   
   const qtyEl = $('#md-qty', el), codeEl = $('#md-code', el);
   let qtyTouched = !isNew;
@@ -6180,6 +6657,17 @@ function globalSearchInit() {
 
 
 const CHANGELOG = [
+  {
+    ver: '0.11.1', title: '新增 HTTPS 访问（手机扫码）；扫码支持一维条码 + 对焦优化', date: '2026-10',
+    items: [
+      '「设置 → 桌面/网络」新增 <b>HTTPS 访问</b>：手机 / 平板在局域网里用 http 打开时，浏览器不给用摄像头、扫码用不了；打开开关后用 <b>https://本机IP:端口</b> 访问即可正常扫码。',
+      'HTTPS <b>默认与 HTTP 共用同一个端口</b>，原有的 http 地址、托盘「打开面板」、桌面快捷方式与多仓互联都不受影响；证书自动生成 / 自动续期，无需自己申请，手机连不上还能一键放行防火墙端口。',
+      '扫码<b>不再只认二维码</b>：商品条码（69 码）、药品追溯码等一维条码都能扫；扫到不是单据的内容也会显示出来，可一键复制，或直接查对应的物资 / 药品。',
+      '扫码更好用：<b>自动连续对焦</b> + 「🔍 重新对焦」按钮（点画面也行）；出入库可 📷 扫码选物资，SN 物资可连续扫码录入 / 勾选，药品条码与物资编码也能扫码填入。',
+      'http 页面的扫码提示里新增 <b>「🔒 尝试用 https 打开扫码」</b>，点一下就用 https 重新打开本页恢复扫码（开启 HTTPS 后才出现）。',
+      '修复邮件「发送 / 漏发记录」：当天只要<b>成功发出过任意一封邮件</b>就不再判为漏发，并标出是哪一种。',
+    ],
+  },
   {
     ver: '0.11.0', title: '批量管理、办公物资进出库、专项台账出入库记录表、导入模板下拉、盘库范围可选', date: '2026-09',
     items: [

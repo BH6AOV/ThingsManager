@@ -9,6 +9,9 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
+const net = require('net');
 const zlib = require('zlib');
 const express = require('express');
 const multer = require('multer');
@@ -21,7 +24,7 @@ const { spawnSync, spawn } = require('child_process');
 
 
 
-const APP_VERSION = '0.11.0';
+const APP_VERSION = '0.11.1';
 
 const ROOT = __dirname;
 
@@ -1865,7 +1868,7 @@ function saveSettingsAll(body) {
 }
 
 app.get('/api/health', (req, res) => ok(res, { time: now(), version: 1 }));
-app.get('/api/meta', (req, res) => ok(res, { settings: settingsObj(), templates: templateList(), docTypes: DOC_META, brandLimits: BRAND_LIMITS, edition: EDITION, update: updateBrief(), auth: { mode: authMode(), current: publicUser(sessionUser(req)), has_admin: adminCount() > 0 }, interlink: { count: sget('SELECT COUNT(*) AS c FROM peers WHERE enabled=1').c }, dev: { flow: true, extauth: devEnabled('extauth'), dingtalk: devEnabled('dingtalk') }, setup: { done: isSetupDone() }, data_dir: DATA_DIR, desktop: !!(process.env.THM_DESKTOP && process.env.THM_DESKTOP !== '0'), listen: { host: LISTEN_HOST, port: PORT } }));
+app.get('/api/meta', (req, res) => ok(res, { settings: settingsObj(), templates: templateList(), docTypes: DOC_META, brandLimits: BRAND_LIMITS, edition: EDITION, update: updateBrief(), auth: { mode: authMode(), current: publicUser(sessionUser(req)), has_admin: adminCount() > 0 }, interlink: { count: sget('SELECT COUNT(*) AS c FROM peers WHERE enabled=1').c }, dev: { flow: true, extauth: devEnabled('extauth'), dingtalk: devEnabled('dingtalk') }, setup: { done: isSetupDone() }, data_dir: DATA_DIR, desktop: !!(process.env.THM_DESKTOP && process.env.THM_DESKTOP !== '0'), listen: { host: LISTEN_HOST, port: PORT }, https: { enable: httpsCfg().enable, port: httpsCfg().port, urls: httpsUrls(httpsCfg().port) } }));
 
 
 
@@ -2076,6 +2079,10 @@ const API_DOC_GROUPS = [
     ['POST', '/api/desktop/data', '迁移数据目录（需绝对路径、目标为空目录；写运行配置后重启生效；环境变量启动的实例写“本实例专属设置”）', 'admin'],
     ['POST', '/api/desktop/data/revert', '清除本实例专属数据目录设置（恢复为环境变量指定的目录）', 'admin'],
     ['POST', '/api/desktop/restart', '重启平台（安装版由守护自动拉起；开发模式以新进程重启）', 'admin'],
+    ['GET', '/api/https/info', 'HTTPS 访问状态：开关 / 端口（默认与 HTTP 共用）/ 可用地址 / 自签名证书信息'],
+    ['POST', '/api/https/config', '开启或关闭 HTTPS 访问（默认与 HTTP 同端口共用；可改为独立端口，如 3443）', 'admin'],
+    ['POST', '/api/https/regen', '重新生成 HTTPS 自签名证书（含当前主机名与所有本机 IP）', 'admin'],
+    ['POST', '/api/https/firewall', '放行 Windows 防火墙的 HTTPS 端口（需管理员；失败会返回可手动执行的命令）', 'admin'],
     ['GET', '/api/fs/browse', '服务端目录浏览（桌面版选文件夹用）', 'admin'],
   ] },
   { name: '邮件提醒 / 文档 / 搜索 / 品牌', hint: '邮件通知与漏发补发、站内文档站、全局搜索、Logo 与登录背景', items: [
@@ -6231,30 +6238,39 @@ function atOrAfterDailyHour() {
   const n = new Date(); return n.getHours() > hour || (n.getHours() === hour && n.getMinutes() > 0);
 }
 
+
+
 function mailDaySummary(n = 14) {
   const t = today(); const since = addDays(t, -(n - 1));
   const logs = sall('SELECT * FROM mail_logs WHERE day >= ? ORDER BY day ASC, id ASC', since);
   const byDay = new Map(); for (const l of logs) { if (!byDay.has(l.day)) byDay.set(l.day, []); byDay.get(l.day).push(l); }
   const fe = getSetting('mail_first_enabled', ''); 
   const dueSet = dueDaysFrom(fe); 
+  const SRC = { resend: '手工补发', manual: '手动发送', due: '档位提醒', boot: '启动补发', schedule: '' };
   const out = [];
   for (let i = 0; i < n; i++) {
     const day = addDays(since, i);
     const arr = byDay.get(day) || [];
-    const auto = arr.find(l => l.trigger === 'schedule' || l.trigger === 'boot');
-    const resend = arr.find(l => l.trigger === 'resend');
-    const last = arr[arr.length - 1] || null;
+    const pick = st => arr.filter(l => l.status === st).pop() || null;
+    const sent = pick('sent'), failed = pick('failed'), empty = pick('empty');
+    const auto = arr.filter(l => l.trigger === 'schedule' || l.trigger === 'boot').pop() || null;
+    const rec = sent || failed || empty;      
     let status, label;
-    if (!fe || day < fe) { status = 'none'; label = '未启用·无记录'; }
+    if (sent) { status = 'sent'; label = '已发送'; }
+    else if (failed) { status = 'failed'; label = '发送失败'; }
+    else if (empty) { status = 'empty'; label = '已检查·无内容'; }
+    else if (!fe || day < fe) { status = 'none'; label = '未启用·无记录'; }
     else if (!dueSet.has(day)) { status = 'idle'; label = '未到提醒间隔'; }
-    else if (!auto) {
-      if (day === t) { status = 'pending'; label = atOrAfterDailyHour() ? '今日尚未发送' : '未到定时点'; }
-      else { status = 'missed'; label = '未发送(漏发)' + (resend ? '·已手工补发' : ''); }
-    } else {
-      status = auto.status; label = ({ sent: '已发送', empty: '已检查·无内容', failed: '发送失败' })[auto.status] || auto.status;
-      if (auto.trigger === 'boot') label += '·补发';
-    }
-    out.push({ day, status, label, trigger: auto ? auto.trigger : (resend ? 'resend' : (last ? last.trigger : '')), items: auto ? auto.items : (resend ? resend.items : 0), time: auto ? auto.created_at : (resend ? resend.created_at : '') });
+    else if (day === t) { status = 'pending'; label = atOrAfterDailyHour() ? '今日尚未发送' : '未到定时点'; }
+    else { status = 'missed'; label = '未发送(漏发)'; }
+    if (rec && SRC[rec.trigger]) label += '（' + SRC[rec.trigger] + '）';
+    out.push({
+      day, status, label,
+      trigger: rec ? rec.trigger : (auto ? auto.trigger : ''),
+      by: rec ? rec.trigger : '',
+      items: rec ? rec.items : 0,
+      time: rec ? rec.created_at : '',
+    });
   }
   return out;
 }
@@ -6601,6 +6617,352 @@ app.get('/api/search', asy(async (req, res) => {
 }));
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const HTTPS_DIR = path.join(DATA_DIR, 'https');
+const HTTPS_KEY_FILE = path.join(HTTPS_DIR, 'key.pem');
+const HTTPS_CERT_FILE = path.join(HTTPS_DIR, 'cert.pem');
+const HTTPS_DEFAULT_PORT = 3443;   
+const HTTPS_DAYS = 825;            
+
+
+function httpsCfg() {
+  const enable = String(getSetting('https_enable', '0')) === '1';
+  const shared = String(getSetting('https_shared', '1')) !== '0';
+  const p = parseInt(getSetting('https_port', ''), 10);
+  const sep = (Number.isInteger(p) && p > 0 && p <= 65535) ? p : HTTPS_DEFAULT_PORT;
+  return { enable, shared, sep_port: sep, port: shared ? PORT : sep };
+}
+function localIpv4s() {
+  const out = [];
+  try {
+    const ifs = os.networkInterfaces();
+    for (const name of Object.keys(ifs)) {
+      for (const a of (ifs[name] || [])) {
+        if (!a || a.family !== 'IPv4' || a.internal) continue;
+        if (/^169\.254\./.test(a.address)) continue;            
+        if (!out.includes(a.address)) out.push(a.address);
+      }
+    }
+  } catch {  }
+  return out;
+}
+function httpsUrls(port) { return localIpv4s().map(ip => `https://${ip}:${port}`); }
+function httpsSans() {
+  const host = os.hostname() || 'thingsmanager';
+  return [...new Set(['localhost', '127.0.0.1', '::1', host, host + '.local', ...localIpv4s()].filter(Boolean))];
+}
+
+
+function derLen(n) {
+  if (n < 0x80) return Buffer.from([n]);
+  const b = [];
+  let v = n;
+  while (v > 0) { b.unshift(v & 0xff); v = Math.floor(v / 256); }
+  return Buffer.from([0x80 | b.length, ...b]);
+}
+function der(tag, buf) { return Buffer.concat([Buffer.from([tag]), derLen(buf.length), buf]); }
+function derSeq(...p) { return der(0x30, Buffer.concat(p)); }
+function derSet(...p) { return der(0x31, Buffer.concat(p)); }
+function derOid(dotted) {
+  const p = String(dotted).split('.').map(Number);
+  const b = [p[0] * 40 + p[1]];
+  for (let i = 2; i < p.length; i++) {
+    let v = p[i]; const t = [v & 0x7f]; v = Math.floor(v / 128);
+    while (v > 0) { t.unshift((v & 0x7f) | 0x80); v = Math.floor(v / 128); }
+    b.push(...t);
+  }
+  return der(0x06, Buffer.from(b));
+}
+function derIntBuf(buf) {                      
+  let b = Buffer.from(buf);
+  while (b.length > 1 && b[0] === 0 && !(b[1] & 0x80)) b = b.slice(1);
+  if (b[0] & 0x80) b = Buffer.concat([Buffer.from([0]), b]);
+  return der(0x02, b);
+}
+function derInt(n) { const b = []; let v = n; do { b.unshift(v & 0xff); v = Math.floor(v / 256); } while (v > 0); return derIntBuf(Buffer.from(b)); }
+function derBitStr(buf, unused = 0) { return der(0x03, Buffer.concat([Buffer.from([unused]), buf])); }
+function derOctet(buf) { return der(0x04, buf); }
+function derUtf8(s) { return der(0x0c, Buffer.from(String(s), 'utf8')); }
+function derIa5(s) { return der(0x16, Buffer.from(String(s), 'latin1')); }
+function derBool(v) { return der(0x01, Buffer.from([v ? 0xff : 0x00])); }
+function derCtx(n, buf) { return der(0xa0 | n, buf); }
+function derTime(d) {
+  const p = x => String(x).padStart(2, '0');
+  const y = d.getUTCFullYear();
+  const rest = p(d.getUTCMonth() + 1) + p(d.getUTCDate()) + p(d.getUTCHours()) + p(d.getUTCMinutes()) + p(d.getUTCSeconds()) + 'Z';
+  return (y >= 1950 && y < 2050) ? der(0x17, Buffer.from(p(y % 100) + rest, 'ascii')) : der(0x18, Buffer.from(String(y) + rest, 'ascii'));
+}
+function x509Name(pairs) { return derSeq(...pairs.map(([o, v]) => derSet(derSeq(derOid(o), derUtf8(v))))); }
+function ipv6Bytes(s) {                        
+  const t = String(s).trim().replace(/%.*$/, '');
+  const m = t.split('::');
+  if (m.length > 2) return null;
+  const head = m[0] ? m[0].split(':') : [];
+  const tail = (m.length === 2 && m[1]) ? m[1].split(':') : [];
+  const g = [];
+  for (const x of [...head, ...tail]) { const n = parseInt(x, 16); if (!Number.isFinite(n) || n < 0 || n > 0xffff) return null; }
+  if (m.length === 2) {
+    const fill = 8 - head.length - tail.length;
+    if (fill < 0) return null;
+    for (let i = 0; i < fill; i++) g.push(0);
+  }
+  for (const x of head) g.push(parseInt(x, 16));
+  for (const x of tail) g.push(parseInt(x, 16));
+  if (g.length !== 8) return null;
+  const b = Buffer.alloc(16);
+  g.forEach((n, i) => b.writeUInt16BE(n, i * 2));
+  return b;
+}
+
+function sanExtension(list) {
+  const names = [];
+  for (const raw of list) {
+    const v = String(raw == null ? '' : raw).trim();
+    if (!v) continue;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(v)) {
+      const b = Buffer.from(v.split('.').map(x => parseInt(x, 10)));
+      if (b.length === 4 && [...b].every(x => x <= 255)) names.push(der(0x87, b));
+    } else if (v.includes(':')) {
+      const b = ipv6Bytes(v);
+      if (b) names.push(der(0x87, b));
+    } else {
+      names.push(der(0x82, Buffer.from(v, 'latin1')));
+    }
+  }
+  return derSeq(...names);
+}
+
+function makeSelfSignedCert({ keyPem, cn, sans, days = HTTPS_DAYS }) {
+  const algId = derSeq(derOid('1.2.840.113549.1.1.11'), der(0x05, Buffer.alloc(0)));   
+  const pub = crypto.createPublicKey(keyPem);
+  const spki = pub.export({ type: 'spki', format: 'der' });
+  const jwk = pub.export({ format: 'jwk' });
+  const b64u = s => Buffer.from(String(s), 'base64url');
+  const rsaPub = derSeq(derIntBuf(b64u(jwk.n)), derIntBuf(b64u(jwk.e)));
+  const ski = crypto.createHash('sha1').update(rsaPub).digest();                        
+  const notBefore = new Date(Date.now() - 86400000);
+  const notAfter = new Date(Date.now() + days * 86400000);
+  const name = x509Name([['2.5.4.10', 'ThingsManager'], ['2.5.4.3', cn]]);
+  const exts = derSeq(
+    derSeq(derOid('2.5.29.19'), derBool(true), derOctet(derSeq())),                                  
+    derSeq(derOid('2.5.29.15'), derBool(true), derOctet(derBitStr(Buffer.from([0xa0]), 5))),         
+    derSeq(derOid('2.5.29.37'), derOctet(derSeq(derOid('1.3.6.1.5.5.7.3.1')))),                      
+    derSeq(derOid('2.5.29.17'), derOctet(sanExtension(sans))),                                       
+    derSeq(derOid('2.5.29.14'), derOctet(derOctet(ski)))                                             
+  );
+  const serial = crypto.randomBytes(16); serial[0] &= 0x7f;
+  const tbs = derSeq(derCtx(0, derInt(2)), derIntBuf(serial), algId, name, derSeq(derTime(notBefore), derTime(notAfter)), name, spki, derCtx(3, exts));
+  const sig = crypto.sign('sha256', tbs, crypto.createPrivateKey(keyPem));
+  const certDer = derSeq(tbs, algId, derBitStr(sig));
+  const b64 = certDer.toString('base64').replace(/(.{64})/g, '$1\n').replace(/\n+$/, '');
+  return { certPem: '-----BEGIN CERTIFICATE-----\n' + b64 + '\n-----END CERTIFICATE-----\n', keyPem };
+}
+function readTextOr(file, def = '') { try { return fs.readFileSync(file, 'utf8'); } catch { return def; } }
+function httpsEnsureCert(force) {
+  fs.mkdirSync(HTTPS_DIR, { recursive: true });
+  let keyPem = readTextOr(HTTPS_KEY_FILE);
+  if (keyPem) { try { crypto.createPrivateKey(keyPem); } catch { keyPem = ''; } }
+  if (!keyPem) {
+    keyPem = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } }).privateKey;
+    fs.writeFileSync(HTTPS_KEY_FILE, keyPem, { mode: 0o600 });
+  }
+  let certPem = readTextOr(HTTPS_CERT_FILE);
+  let need = !!force || !certPem;
+  if (!need) {
+    try {
+      const x = new crypto.X509Certificate(certPem);
+      const left = Date.parse(x.validTo) - Date.now();
+      const have = new Set(parseSanText(x.subjectAltName).map(ipKey));
+      if (!(left > 30 * 86400000)) need = true;                                   
+      else if (httpsSans().some(s => !have.has(ipKey(s)))) need = true;            
+      else if (x.publicKey.export({ type: 'spki', format: 'der' }).toString('base64') !== crypto.createPublicKey(keyPem).export({ type: 'spki', format: 'der' }).toString('base64')) need = true;  
+    } catch { need = true; }
+  }
+  if (need) {
+    certPem = makeSelfSignedCert({ keyPem, cn: os.hostname() || 'thingsmanager', sans: httpsSans() }).certPem;
+    fs.writeFileSync(HTTPS_CERT_FILE, certPem);
+  }
+  return { key: keyPem, cert: certPem, regenerated: need };
+}
+function parseSanText(t) {
+  return String(t == null ? '' : t).split(',').map(s => s.trim()).filter(Boolean)
+    .map(s => s.replace(/^(DNS|DNS Name|IP Address|IP|email|URI):\s*/i, '').trim()).filter(Boolean);
+}
+
+
+function ipKey(s) {
+  const v = String(s == null ? '' : s).trim();
+  if (!v) return '';
+  const b6 = v.includes(':') ? ipv6Bytes(v) : null;
+  if (b6) return b6.toString('hex');
+  return v.toLowerCase();
+}
+function httpsCertInfo(certPem) {
+  if (!certPem) return null;
+  try {
+    const x = new crypto.X509Certificate(certPem);
+    const left = Math.floor((Date.parse(x.validTo) - Date.now()) / 86400000);
+    return {
+      subject: String(x.subject || '').replace(/\r?\n/g, ' ').trim(),
+      not_before: x.validFrom, not_after: x.validTo, days_left: Number.isFinite(left) ? left : null,
+      sans: parseSanText(x.subjectAltName), fingerprint: x.fingerprint256,
+      expired: Number.isFinite(left) ? left < 0 : false,
+    };
+  } catch { return null; }
+}
+const httpSrv = http.createServer(app);   
+let httpsShared = null;                   
+let httpsSepSrv = null;                   
+let httpsSepPort = 0;
+let muxUp = false;                        
+let httpsErr = '';
+function httpsUp() {
+  const cfg = httpsCfg();
+  if (!cfg.enable) return false;
+  if (cfg.shared) return !!(httpsShared && muxUp);
+  return !!(httpsSepSrv && httpsSepSrv.listening);
+}
+function httpsNewServer(pair) {
+  const srv = https.createServer({ key: pair.key, cert: pair.cert }, app);
+  srv.on('error', (e) => {
+    httpsErr = (e && e.code === 'EADDRINUSE') ? ('端口 ' + (httpsSepPort || httpsCfg().port) + ' 已被占用，请换一个端口') : ((e && e.message) || String(e));
+    console.error('[HTTPS] 监听失败：' + httpsErr);
+  });
+  return srv;
+}
+function httpsServersDrop() {
+  const arr = [httpsShared, httpsSepSrv];
+  httpsShared = null; httpsSepSrv = null; httpsSepPort = 0;
+  for (const s of arr) { if (s) { try { s.close(); } catch {  } } }
+}
+
+
+
+
+function makeMux(tlsProvider) {
+  return net.createServer(socket => {
+    socket.on('error', () => { try { socket.destroy(); } catch {  } });
+    socket.setTimeout(15000, () => { try { socket.destroy(); } catch {  } });
+    socket.once('data', buf => {
+      try { socket.setTimeout(0); } catch {  }
+      
+      
+      
+      socket.pause();
+      let srv = httpSrv;
+      if (buf && buf[0] === 22) {                                  
+        srv = tlsProvider();
+        if (!srv) { try { socket.destroy(); } catch {  } return; }
+      }
+      try {
+        srv.emit('connection', socket);
+        socket.unshift(buf);
+        socket.resume();
+      } catch { try { socket.destroy(); } catch {  } }
+    });
+  });
+}
+function muxTlsProvider() { return () => (httpsCfg().shared && httpsShared && muxUp ? httpsShared : null); }
+
+function startHttps() {
+  const cfg = httpsCfg();
+  if (!cfg.enable) { httpsServersDrop(); httpsErr = ''; return Promise.resolve(false); }
+  let pair = null;
+  try { pair = httpsEnsureCert(false); } catch (e) { httpsErr = '证书生成失败：' + e.message; console.error('[HTTPS] ' + httpsErr); return Promise.resolve(false); }
+  if (cfg.shared) {                       
+    httpsServersDrop();
+    httpsShared = httpsNewServer(pair);
+    if (muxUp) { httpsErr = ''; console.log(`  HTTPS: https://${LISTEN_HOST}:${PORT}  （与 HTTP 共用端口；自签名证书，浏览器首次访问会提示“继续前往”）`); }
+    else httpsErr = '主端口尚未就绪';
+    return Promise.resolve(!!muxUp);
+  }
+  httpsServersDrop();                    
+  const srv = httpsNewServer(pair);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = v => { if (!settled) { settled = true; resolve(v); } };
+    srv.listen(cfg.sep_port, LISTEN_HOST, () => {
+      httpsErr = '';
+      console.log(`  HTTPS: https://${LISTEN_HOST}:${cfg.sep_port}  （自签名证书，浏览器首次访问会提示“继续前往”）`);
+      finish(true);
+    });
+    srv.once('error', () => finish(false));
+    httpsSepSrv = srv; httpsSepPort = cfg.sep_port;
+  });
+}
+function httpsInfoObj(req) {
+  const cfg = httpsCfg();
+  const port = cfg.shared ? PORT : cfg.sep_port;
+  return {
+    enable: cfg.enable, shared: cfg.shared, port, sep_port: cfg.sep_port, default_port: HTTPS_DEFAULT_PORT,
+    running: httpsUp(), error: httpsErr,
+    urls: httpsUrls(port), ips: localIpv4s(), hostname: os.hostname(),
+    http_port: PORT, cert: httpsCertInfo(readTextOr(HTTPS_CERT_FILE)), cert_dir: HTTPS_DIR,
+    on_https: !!(req && req.secure),
+  };
+}
+app.get('/api/https/info', wrap((req, res) => {
+  if (!needLogin(req, res)) return;
+  ok(res, httpsInfoObj(req));
+}));
+app.post('/api/https/config', asy(async (req, res) => {
+  if (!needAdmin(req, res)) return;
+  const b = req.body || {};
+  const cfg = httpsCfg();
+  const enable = (b.enable === undefined) ? cfg.enable : !!b.enable;
+  let shared = (b.shared === undefined) ? cfg.shared : !!b.shared;
+  let port = parseInt(b.port, 10);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) port = cfg.sep_port;
+  let auto_shared = false;
+  if (!shared && port === PORT) { shared = true; auto_shared = true; }   
+  setSetting('https_enable', enable ? '1' : '0');
+  setSetting('https_shared', shared ? '1' : '0');
+  setSetting('https_port', String(port));
+  await startHttps();
+  const info = httpsInfoObj(req);
+  const where = shared ? `https://本机IP:${PORT}（与 HTTP 共用 ${PORT} 端口）` : `https://本机IP:${port}`;
+  info.note = enable
+    ? (info.running
+      ? `已开启：局域网设备用 ${where} 访问即可调用摄像头（自签名证书，首次会提示“继续前往”；如无法访问可点「放行防火墙端口」）` + (auto_shared ? '。该端口与 HTTP 端口相同，已自动按「共用端口」处理' : '')
+      : `已保存，但 HTTPS 未就绪${info.error ? '：' + info.error : ''}`)
+    : '已关闭 HTTPS 访问（HTTP 访问不受影响）';
+  ok(res, info);
+}));
+app.post('/api/https/regen', asy(async (req, res) => {
+  if (!needAdmin(req, res)) return;
+  httpsEnsureCert(true);
+  await startHttps();
+  const info = httpsInfoObj(req);
+  info.note = '证书已重新生成（含当前主机名与全部本机 IP），请刷新页面或重新用手机访问';
+  ok(res, info);
+}));
+
+app.post('/api/https/firewall', wrap((req, res) => {
+  if (!needAdmin(req, res)) return;
+  const port = httpsCfg().port;
+  const cmd = `netsh advfirewall firewall add rule name=ThingsManagerHttps dir=in action=allow protocol=TCP localport=${port} profile=private,domain,public`;
+  if (process.platform !== 'win32') return ok(res, { ok: false, port, cmd, note: '该按钮只针对 Windows 防火墙；Linux 请用 ufw / firewalld 放行 TCP ' + port });
+  const run = args => { try { const r = spawnSync('netsh.exe', args, { encoding: 'utf8' }); return { code: r.status, out: String(r.stdout || '').trim(), err: String(r.stderr || '').trim() }; } catch (e) { return { code: -1, out: '', err: e.message }; } };
+  run(['advfirewall', 'firewall', 'delete', 'rule', 'name=ThingsManagerHttps']);
+  const add = run(['advfirewall', 'firewall', 'add', 'rule', 'name=ThingsManagerHttps', 'dir=in', 'action=allow', 'protocol=TCP', 'localport=' + port, 'profile=private,domain,public']);
+  const okAdd = add.code === 0;
+  ok(res, { ok: okAdd, port, cmd, add, note: okAdd ? `已放行 TCP ${port}（规则名 ThingsManagerHttps）` : '放行失败：需要管理员权限（安装版服务模式一般可直接成功；当前模式请以管理员身份手动执行上面的 netsh 命令）' });
+}));
+
+
 function normalizeHost(raw) {
   const x = String(raw == null ? '' : raw).trim().toLowerCase();
   if (!x || x === '0.0.0.0' || x === '::' || x === '[::]' || x === '0:0:0:0:0:0:0:0' || x === 'localhost') return '0.0.0.0';
@@ -6628,7 +6990,9 @@ ensureSuperFromCfg();
 ensureTemplates();
 setTimeout(() => { try { if (templateList().some(t => !t.exists)) {} } catch {} }, 0);
 function startListen() {
-  app.listen(PORT, LISTEN_HOST, () => {
+  
+  const booted = () => {
+    muxUp = true;
     console.log('==========================================');
     console.log('  ' + appTitle() + ' 已启动' + (EDITION.edition ? `（${EDITION.edition} 版）` : ''));
     console.log(`  版本: V${APP_VERSION}`);
@@ -6636,9 +7000,12 @@ function startListen() {
     console.log(`  数据: ${DB_FILE}`);
     console.log(`  模板: ${TPL_DIR}`);
     console.log('==========================================');
-  }).on('error', (e) => { console.error('监听失败（' + LISTEN_HOST + ':' + PORT + '）：' + e.message + '。请检查该端口是否被占用或权限不足。'); process.exit(1); });
+    startHttps();                       
+  };
+  makeMux(muxTlsProvider()).listen(PORT, LISTEN_HOST, booted)
+    .on('error', (e) => { console.error('监听失败（' + LISTEN_HOST + ':' + PORT + '）：' + e.message + '。请检查该端口是否被占用或权限不足。'); process.exit(1); });
   if (!isCoverAll(LISTEN_HOST) && !isLoopback(LISTEN_HOST)) {
-    app.listen(PORT, LOOPBACK_HOST, () => { console.log(`  回环兜底: http://127.0.0.1:${PORT}`); })
+    makeMux(muxTlsProvider()).listen(PORT, LOOPBACK_HOST, () => { console.log(`  回环兜底: http://127.0.0.1:${PORT}`); })
       .on('error', (e) => console.warn('127.0.0.1 回环兜底监听失败（可忽略）：' + e.code));
   }
 }

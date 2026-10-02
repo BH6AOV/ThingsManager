@@ -9,10 +9,10 @@
 #define MyAppName "ThingsManager"
 #define MyPublisher "橙子木"
 #ifndef MyAppVer
-#define MyAppVer "0.11.0"
+#define MyAppVer "0.11.1"
 #endif
 #ifndef VerInfoVersion
-#define VerInfoVersion "0.11.0.0"
+#define VerInfoVersion "0.11.1.0"
 #endif
 #ifndef MyArch
 #define MyArch "x64"
@@ -95,7 +95,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 Filename: "{app}\ThingsManager.exe"; Parameters: "--install-quiet"; Flags: runhidden waituntilterminated; StatusMsg: "正在注册并启动 ThingsManager 服务…"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=ThingsManager3200"; Flags: runhidden; StatusMsg: "配置防火墙…"
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=ThingsManager3200 dir=in action=allow protocol=TCP localport=3200 profile=private,domain,public"; Flags: runhidden; StatusMsg: "配置防火墙…"
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=ThingsManager3200 dir=in action=allow protocol=TCP localport=3200,3443 profile=private,domain,public"; Flags: runhidden; StatusMsg: "配置防火墙…"
 
 Filename: "{app}\ThingsManager.exe"; Parameters: "--tray"; Flags: nowait runascurrentuser; StatusMsg: "正在启动托盘守护…"
 Filename: "http://127.0.0.1:3200/"; Flags: postinstall shellexec unchecked; Description: 打开管理面板（http://127.0.0.1:3200）
