@@ -9,7 +9,18 @@ const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const escRich = s => esc(s).replace(/&lt;b&gt;/gi, '<b>').replace(/&lt;\/b&gt;/gi, '</b>').replace(/&lt;br\s*\/?&gt;/gi, '<br>');
-const fmtDT = s => (s || '').slice(0, 16).replace('T', ' ');
+
+
+
+const fmtDT = s => {
+  const v = String(s == null ? '' : s).trim();
+  if (!v) return '';
+  if (/[zZ]$/.test(v) || /[+-]\d{2}:?\d{2}$/.test(v)) {
+    const d = new Date(v);
+    if (!isNaN(d.getTime())) return new Date(d.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ');
+  }
+  return v.slice(0, 16).replace('T', ' ');
+};
 const TYPE_META = { in: { t: '入库', c: 'green' }, out: { t: '出库', c: 'orange' }, count: { t: '盘库', c: 'cyan' } };
 
 function loanDueVal(l) { if (!l || l.status !== 'out' || l.left == null) return null; return -(Number(l.left) || 0); }
@@ -1971,7 +1982,7 @@ async function renderIo(v, param) {
       <label style="min-width:220px" class="grow"><span class="lab">${io.type === 'in' ? '供应商' : (io.flow ? '客户 / 领用部门（互联仓库）' : '客户 / 领用部门')}</span>${io.type === 'out' && io.flow
         ? `<select class="input" id="io-party-sel"><option value="">— 选择互联仓库 —</option>${peersOn.map(p => `<option value="${p.id}" ${String(io.peerId) === String(p.id) ? 'selected' : ''}>${esc(p.name)}（${esc(p.host)}:${p.port}）</option>`).join('')}</select>`
         : `<input class="input" id="io-party" list="unit-list" value="${esc(io.party || (io.type === 'in' ? state.settings.default_party || '' : ''))}" placeholder="${io.type === 'in' ? '供应商' : '客户'}（可下拉选常用单位，也可手写）">`}</label>
-      ${io.type === 'out' ? `<label class="check" style="align-self:flex-end;padding-bottom:9px;white-space:nowrap" title="勾选后：领用部门从已添加的互联仓库中选择；保存单据时自动把这张出库单推送给对方（对方确认后按其入库单入账）"><input type="checkbox" id="io-flow" ${io.flow ? 'checked' : ''}> 🔄 跨库流转</label>` : ''}
+      ${io.type === 'out' ? `<label class="check" style="align-self:flex-end;white-space:nowrap" title="勾选后：领用部门从已添加的互联仓库中选择；保存单据时自动把这张出库单推送给对方（对方确认后按其入库单入账）"><input type="checkbox" id="io-flow" ${io.flow ? 'checked' : ''}> 🔄 跨库流转</label>` : ''}
       <label style="width:150px"><span class="lab">经办人</span><input class="input" id="io-op" value="${esc(io.operator)}"></label>
       <label class="grow" style="min-width:220px"><span class="lab">备注</span><input class="input" id="io-rmk" value="${esc(io.remark)}"></label>
     </div>
@@ -3087,7 +3098,7 @@ async function countExportDialog(ids) {
       <td class="muted">${esc(r.spec || '')}</td><td>${esc(r.unit || '')}</td>
       <td><input class="input num" type="number" data-k="last" value="${r.last}" style="width:76px"></td>
       <td><input class="input num" type="number" data-k="change" value="${r.change}" style="width:76px"></td>
-      <td><input class="input num" type="number" data-k="calc" value="${r.calc}" style="width:76px"></td>
+      <td><input class="input num" type="number" data-k="calc" value="${r.calc}" style="width:76px" readonly title="本次计算数量＝实物盘点数量（自动跟随）"></td>
       <td><input class="input num" type="number" data-k="actual" value="${r.actual == null ? '' : r.actual}" style="width:76px" placeholder="实盘"></td>
       <td><input class="input" data-k="remark" value="${esc(r.remark || '')}" style="min-width:110px"></td></tr>`).join('')
       : '<tr><td colspan="10"><div class="empty">没有可导出的物资</div></td></tr>';
@@ -3176,8 +3187,16 @@ async function renderCount(v, param) {
   }
   let base = [];
   if (!draft) { try { base = (await api('/api/countsheet?ids=' + scopeIds().join(','))).rows || []; } catch { base = []; } }
+  const orderInfo = await api('/api/count/order').catch(() => ({ count: 0 }));
   
-  const mkSys = r => ({ uid: 's' + r.sku_id, sys: true, sku_id: r.sku_id, sn: !!r.sn_managed, cur: Number(r.calc) || 0, category: r.category || '', code: r.sku_code, name: r.name, model: r.spec || '', loc: r.location || '', unit: r.unit || '', last: String(r.last), change: '0', calc: String(r.calc), actual: String(r.actual), remark: r.remark || '' });
+  
+  
+  const mkSys = r => ({
+    uid: 's' + r.sku_id, sys: true, sku_id: r.sku_id, sn: !!r.sn_managed, cur: Number(r.calc) || 0,
+    category: r.category || '', code: r.sku_code, name: r.name, model: r.spec || '', loc: r.location || '', unit: r.unit || '',
+    last: String(r.last), change: String(Number(r.calc) - Number(r.last)), calc: String(r.calc), actual: String(r.actual), remark: r.remark || '',
+    _base: { code: String(r.sku_code == null ? '' : r.sku_code), category: r.category || '', name: String(r.name == null ? '' : r.name), model: r.spec || '', loc: r.location || '', unit: r.unit || '', last: String(r.last), actual: String(r.actual), remark: r.remark || '' },
+  });
   const savedRows = draft && Array.isArray(meta.rows) ? meta.rows.map(r => ({ ...r, sku_id: r.sku_id != null ? Number(r.sku_id) : null, cur: Number(r.cur) || 0, last: String(r.last == null ? '0' : r.last), change: String(r.change == null ? '0' : r.change), calc: String(r.calc == null ? '0' : r.calc), actual: String(r.actual == null ? '' : r.actual) })) : [];
   const list = draft ? savedRows.filter(r => r.sys !== false) : base.map(mkSys);
   const free = draft ? savedRows.filter(r => r.sys === false) : instFree();
@@ -3214,14 +3233,23 @@ async function renderCount(v, param) {
     </div>
     <div class="row-flex" style="margin-top:6px;gap:14px;align-items:center;flex-wrap:wrap">
       <label class="check"><input type="checkbox" id="ct-only" checked> 仅显示有库存物资</label>
-      <span class="tag">盘点明细支持逐行手工录入与修正：变化=实物−上次、计算数量=实物（自动算）；导出用顶部日期，不另弹窗。</span>
+      <span class="tag">盘点明细支持逐行手工录入与修正：变化＝实物−上次、本次计算数量＝实物盘点数量（自动跟随）；导出用顶部日期，不另弹窗。</span>
+    </div>
+    <div class="row-flex" style="margin-top:6px;gap:10px;align-items:center;flex-wrap:wrap">
+      <span class="tag">盘点表顺序</span>
+      <span class="tag muted">改行首「序号」即可把该行挪到指定位置</span>
+      <button class="btn sm" id="ct-ord-dl" title="导出顺序模板 xlsx：第一列「物资编码」，按你想要的顺序排好后传回">⬇ 顺序模板</button>
+      <button class="btn sm" id="ct-ord-up" title="导入排好序的顺序表（只读第一列物资编码的顺序）">⬆ 导入顺序表</button>
+      <button class="btn sm" id="ct-ord-save" title="把当前页面的顺序记住，下次盘库与导出都按它">💾 记住当前顺序</button>
+      <button class="btn sm ghost" id="ct-ord-clear" title="清除自定义顺序，恢复系统默认（按编码）">↺ 系统顺序</button>
+      <span class="tag muted" id="ct-ord-tag"></span>
     </div>
   </div></div>
   <div class="card"><div class="card-head"><h3>盘点明细（可手工录入/修正）</h3><span class="tag" id="ct-tot"></span></div>
   <div class="tbl-wrap" style="overflow:auto">
   <table class="tbl" style="min-width:1180px"><thead><tr>
-    <th style="width:30px">#</th><th style="width:120px">物资编码</th><th style="width:120px">物资类别</th><th style="width:150px">物资名称</th><th style="width:130px">物资型号</th><th style="width:120px">存放位置</th><th style="width:70px">单位</th>
-    <th style="width:90px" class="num">上次盘点数量</th><th style="width:90px" class="num">本次数量变化</th><th style="width:90px" class="num">本次计算数量</th><th style="width:90px" class="num">实物盘点数量</th><th style="width:140px">备注</th><th style="width:40px"></th>
+    <th style="width:64px" title="直接改这里的数字，即可把该行挪到指定位置">序号</th><th style="width:120px">物资编码</th><th style="width:120px">物资类别</th><th style="width:150px">物资名称</th><th style="width:130px">物资型号</th><th style="width:120px">存放位置</th><th style="width:70px">单位</th>
+    <th style="width:90px" class="num">上次盘点数量</th><th style="width:90px" class="num">本次数量变化</th><th style="width:90px" class="num">本次计算数量</th><th style="width:90px" class="num">实物盘点数量</th><th style="width:140px">备注</th><th style="width:80px"></th>
   </tr></thead><tbody id="ct-body"></tbody></table></div></div>`;
   const tbody = $('#ct-body', v);
   const setTot = () => {
@@ -3229,8 +3257,13 @@ async function renderCount(v, param) {
     const n = a.reduce((x, r) => x + numOf(r.actual), 0);
     $('#ct-tot', v).textContent = `共 ${a.length} 行 · 实物合计 ${n}`;
   };
-  const paint = () => {
+  
+  const shownRows = () => {
     const only = $('#ct-only').checked;
+    const sys = list.filter(r => !only || r.cur > 0 || r.remark || String(r.actual) !== String(r.cur));
+    return [...sys.map(r => ({ kind: 's', r })), ...free.map(r => ({ kind: 'f', r }))];
+  };
+  const paint = () => {
     const catNames = cats.map(c => c.name);
     const catSel = val => {
       const cur = val || '';
@@ -3247,10 +3280,9 @@ async function renderCount(v, param) {
         '<option value="" ' + (cur === '' ? 'selected' : '') + '>— 未设存放位置 —</option>' +
         opts.filter(Boolean).map(o => `<option value="${esc(o)}" ${o === cur ? 'selected' : ''}>${esc(o)}</option>`).join('') + '</select>';
     };
-    const sysRows = list.filter(r => !only || r.cur > 0 || r.remark || String(r.actual) !== String(r.cur));
-    const show = [...sysRows.map(r => ({ kind: 's', r })), ...free.map(r => ({ kind: 'f', r }))];
-    tbody.innerHTML = show.map(({ kind, r }, i) => `<tr data-k="${kind}" data-uid="${esc(r.uid)}">
-      <td class="muted">${i + 1}</td>
+    const show = shownRows();
+    tbody.innerHTML = show.map(({ kind, r }, i) => `<tr class="${dirty(r) ? 'row-dirty' : ''}" data-k="${kind}" data-uid="${esc(r.uid)}">
+      <td><input class="input num" type="number" data-seq="${i + 1}" value="${i + 1}" min="1" max="${show.length}" style="width:56px" title="改这个数字＝把该行挪到第 N 行"></td>
       <td><input class="input mono" data-c="code" value="${esc(r.code)}"></td>
       <td>${catSel(r.category)}</td>
       <td><input class="input" data-c="name" value="${esc(r.name)}"></td>
@@ -3259,18 +3291,60 @@ async function renderCount(v, param) {
       <td><input class="input" data-c="unit" value="${esc(r.unit)}" style="width:60px"></td>
       <td><input class="input num" type="number" data-c="last" value="${r.last}" style="width:76px"></td>
       <td><input class="input num" type="number" data-c="change" value="${r.change}" style="width:76px"></td>
-      <td><input class="input num" type="number" data-c="calc" value="${r.calc}" style="width:76px"></td>
+      <td><input class="input num" type="number" data-c="calc" value="${r.calc}" style="width:76px" readonly title="本次计算数量＝实物盘点数量（自动跟随，不用手改）"></td>
       <td><input class="input num" type="number" data-c="actual" value="${r.actual}" style="width:76px"></td>
       <td><input class="input" data-c="remark" value="${esc(r.remark)}"></td>
-      <td>${kind === 'f' ? '<button class="btn sm danger" data-act="delrow">✕</button>' : (r.sn ? '<span class="badge cyan" title="SN物资：提交须与在库SN数一致">SN</span>' : '<button class="btn sm ghost" data-act="delrow">✕</button>')}</td>
+      <td style="white-space:nowrap">${r.sn ? '<span class="badge cyan" title="SN物资：提交须与在库SN数一致">SN</span>' : ''}${(kind === 'f' || !r.sn) ? '<button class="btn sm ' + (kind === 'f' ? 'danger' : 'ghost') + '" data-act="delrow">✕</button>' : ''}</td>
     </tr>`).join('');
     setTot();
   };
   const findRow = uid => { const r = list.find(x => x.uid === uid) || free.find(x => x.uid === uid); return r; };
+  
+  
+  const writeBackOrder = shown => {
+    const shownSys = shown.filter(x => x.kind === 's').map(x => x.r);
+    const hold = new Set(shownSys.map(r => r.uid));
+    const END = '\u0000end';      
+    const anchor = new Map();
+    let next = END;
+    for (let i = list.length - 1; i >= 0; i--) { const r = list[i]; if (hold.has(r.uid)) next = r.uid; else anchor.set(r.uid, next); }
+    const out = [];
+    const pull = key => list.forEach(r => { if (!hold.has(r.uid) && anchor.get(r.uid) === key) out.push(r); });
+    shownSys.forEach(r => { out.push(r); pull(r.uid); });
+    pull(END);
+    list.splice(0, list.length, ...out);
+    free.splice(0, free.length, ...shown.filter(x => x.kind === 'f').map(x => x.r));
+  };
+  const applySeq = inp => {
+    const tr = inp.closest('tr');
+    const r = tr && findRow(tr.dataset.uid); if (!r) return;
+    const shown = shownRows();
+    const cur = shown.findIndex(x => x.r.uid === r.uid);
+    if (cur < 0) return;
+    
+    const firstFree = shown.findIndex(x => x.kind === 'f');
+    const sysEnd = firstFree < 0 ? shown.length : firstFree;      
+    const min = r.sys ? 1 : sysEnd + 1;
+    const max = r.sys ? Math.max(1, sysEnd) : shown.length;
+    let want = parseInt(inp.value, 10);
+    if (!Number.isFinite(want)) { inp.value = String(cur + 1); return; }
+    const clamped = Math.max(min, Math.min(max, want));
+    inp.value = String(clamped);
+    if (clamped !== want && !r.sys) toast('手工行固定排在明细末尾（导出顺序也如此）', 'info');
+    if (clamped - 1 === cur) return;
+    const item = shown.splice(cur, 1)[0];
+    shown.splice(clamped - 1, 0, item);
+    writeBackOrder(shown);
+    paint();
+    const tr2 = tbody.children[clamped - 1];      
+    if (tr2) { const q = tr2.querySelector('input[data-seq]'); if (q) { q.focus(); q.select(); } }
+  };
   tbody.onchange = e => {
+    const sq = e.target.closest('input[data-seq]'); if (sq) { applySeq(sq); return; }
     const sel = e.target.closest('select[data-c]'); if (!sel) return;
     const tr = sel.closest('tr'); if (!tr) return;
     const r = findRow(tr.dataset.uid); if (r) { r[sel.dataset.c] = sel.value; }
+    markRow(tr);
   };
   tbody.oninput = e => {
     const inp = e.target.closest('input[data-c]'); if (!inp) return;
@@ -3284,17 +3358,27 @@ async function renderCount(v, param) {
       const q = tr.querySelector('[data-c="calc"]'); if (q) q.value = r.calc;
       const q2 = tr.querySelector('[data-c="change"]'); if (q2) q2.value = r.change;
     }
+    markRow(tr);          
     setTot();
   };
   tbody.onclick = e => {
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const tr = b.closest('tr'); const r = findRow(tr.dataset.uid);
-    if (b.dataset.act === 'delrow' && r) { if (r.sys) list.splice(list.findIndex(x => x.uid === r.uid), 1); else free.splice(free.findIndex(x => x.uid === r.uid), 1); paint(); }
+    const act = b.dataset.act;
+    if (act === 'delrow' && r) { if (r.sys) list.splice(list.findIndex(x => x.uid === r.uid), 1); else free.splice(free.findIndex(x => x.uid === r.uid), 1); paint(); }
   };
   $('#ct-only', v).onchange = paint;
   
   
-  const hasEdits = () => list.some(r => String(r.actual) !== String(r.cur) || String(r.remark || '') !== '') || free.some(r => !String(r.uid).startsWith('i'));
+  
+  const dirty = r => {
+    if (!r.sys) return true;
+    const b = r._base || {};
+    return ['last', 'actual', 'remark', 'code', 'name', 'model', 'loc', 'unit', 'category']
+      .some(k => String(r[k] == null ? '' : r[k]) !== String(b[k] == null ? '' : b[k]));
+  };
+  const markRow = tr => { const r = findRow(tr.dataset.uid); if (r) tr.classList.toggle('row-dirty', dirty(r)); };
+  const hasEdits = () => list.some(r => dirty(r)) || free.some(r => !String(r.uid).startsWith('i'));
   const reload = async ask => {
     if (ask && hasEdits() && !await confirmBox('重新载入会按新范围重建盘点明细，已录入的实物数量 / 备注将丢失。继续？', { danger: true, okText: '重新载入' })) return false;
     try {
@@ -3347,6 +3431,35 @@ async function renderCount(v, param) {
       .catch(e => toast(e.message, 'err'));
   };
   $('#ct-drafts', v).onclick = () => draftsModal('count');
+  const paintOrdTag = () => { const t = $('#ct-ord-tag', v); if (t) t.textContent = orderInfo.count ? `已设自定义顺序 ${orderInfo.count} 条（盘库页与导出都按它）` : '系统默认顺序（按物资编码）'; };
+  paintOrdTag();
+  const ordPost = async body => {
+    try { const r = await api('/api/count/order', { method: 'POST', body: JSON.stringify(body) }); orderInfo.count = r.count || 0; paintOrdTag(); return r; }
+    catch (e) { toast(e.message, 'err'); return null; }
+  };
+  $('#ct-ord-dl', v).onclick = async () => { try { await download('/api/count/order/template', `盘库顺序表_${today()}.xlsx`); } catch (e) { toast(e.message, 'err'); } };
+  $('#ct-ord-up', v).onclick = async () => {
+    const f = await pickFile({ accept: '.xlsx' }); if (!f) return;
+    try {
+      const hide = loadingBox('导入顺序表…');
+      let r; try { r = await uploadFile('/api/count/order/import', f); } finally { hide(); }
+      orderInfo.count = r.count || 0; paintOrdTag();
+      toast(r.note || '已保存顺序');
+      if (r.unknown && r.unknown.length) toast(`其中 ${r.unknown.length} 条编码本库不存在，已留存不影响导出`);
+      await reload(false);
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  $('#ct-ord-save', v).onclick = async () => {
+    const codes = [...list.map(r => r.code), ...free.map(r => r.code)].filter(Boolean);
+    if (!codes.length) return toast('当前没有可保存的顺序', 'err');
+    const r = await ordPost({ codes });
+    if (r) toast(r.note || `已记住 ${codes.length} 条顺序`);
+  };
+  $('#ct-ord-clear', v).onclick = async () => {
+    if (!await confirmBox('清除自定义盘点顺序，恢复系统默认（按物资编码）顺序？', { okText: '清除顺序' })) return;
+    const r = await ordPost({ clear: true });
+    if (r) { toast(r.note || '已恢复系统默认顺序'); await reload(false); }
+  };
   $('#ct-export', v).onclick = async () => {
     const sysRows = list.filter(r => r.sku_id != null);
     const rowsOv = sysRows.map(r => ({ sku_id: r.sku_id, last_qty: numOf(r.last), change_qty: numOf(r.change), calc_qty: numOf(r.calc), actual_qty: numOf(r.actual), remark: r.remark || '' }));
@@ -3789,7 +3902,7 @@ const ABOUT_CFG = {
     started: '2026-09',
     
     tokensEstimate: '1,181,464,440 tokens',
-    milestone: 'V0.0.0 → V0.11.1',
+    milestone: 'V0.0.0 → V0.11.2',
   },
 };
 
@@ -3852,7 +3965,7 @@ function logsBody(body) {
   };
   const rowsHtml = rows => rows.length ? `<table class="tbl"><thead><tr><th style="width:148px">时间</th><th style="width:64px">等级</th><th style="width:110px">用户</th><th style="width:92px">状态</th><th style="width:90px">接口</th><th>操作 / 内容</th></tr></thead>
     <tbody>${rows.map(x => `<tr>
-      <td class="muted mono" style="font-size:12px">${esc(x.ts)}</td>
+      <td class="muted mono" style="font-size:12px">${esc(fmtDT(x.ts))}</td>
       <td><span class="badge ${(LV[x.level] || LV.info)[0]}">${(LV[x.level] || LV.info)[1]}</span></td>
       <td class="mono" style="font-size:12px">${esc(x.user || '—')}</td>
       <td><span class="${x.status >= 500 ? 'badge red' : x.status >= 400 ? 'badge orange' : 'badge gray'}">${x.status || '—'}</span>${x.ms != null ? '<span class="muted" style="font-size:11px"> ' + x.ms + 'ms</span>' : ''}</td>
@@ -3863,7 +3976,7 @@ function logsBody(body) {
   
   const acctRowsHtml = rows => rows.length ? `<table class="tbl"><thead><tr><th style="width:148px">时间</th><th style="width:112px">操作账号</th><th style="width:132px">来源 IP</th><th>操作内容</th><th style="width:76px">结果</th></tr></thead>
     <tbody>${rows.map(x => { const bad = Number(x.status) >= 400; return `<tr>
-      <td class="muted mono" style="font-size:12px">${esc(x.ts)}</td>
+      <td class="muted mono" style="font-size:12px">${esc(fmtDT(x.ts))}</td>
       <td class="mono" style="font-size:12px">${esc(x.user || '—')}</td>
       <td class="mono" style="font-size:12px">${esc(x.ip || '—')}</td>
       <td><div title="${esc(x.action || '')}" style="font-size:13px;line-height:1.55">${esc(x.text || x.detail || '')}</div></td>
@@ -4074,7 +4187,7 @@ function loanRemindBody(body) {
     body.innerHTML = `<div class="card"><div class="card-body" style="max-width:700px">
       <h3 style="margin:0 0 8px">借用到期提醒</h3>
       <div class="hint" style="margin-bottom:12px">对<b>在借</b>的借入/借出记录按“应还日期”做到期预警，并显示在<b>首页「待我处理」</b>与<b>物资借用</b>列表：<span class="badge red">淡红 = 已超期</span>、<span class="badge orange">淡橙 = ≤3 天到期</span>、<span class="badge yellow">淡黄 = ≤7 天到期</span>。</div>
-      <label class="check" style="margin-bottom:10px;display:block"><input type="checkbox" id="lr-enable" ${on ? 'checked' : ''}> 启用借用到期 / 超期提醒</label>
+      <label class="check" style="margin-bottom:10px"><input type="checkbox" id="lr-enable" ${on ? 'checked' : ''}> 启用借用到期 / 超期提醒</label>
       <label class="field" style="max-width:280px"><span class="lab">默认借期提醒天数（办理借出/借入时自动填入；未填应还日时按 借出日+借期 推算应还日）</span><input class="input num" id="lr-days" type="number" min="0" value="${esc(st.loan_default_days || '')}" placeholder="留空 = 默认不自动推算"></label>
       <div class="row-flex" style="margin-top:12px"><button class="btn primary" id="lr-save">保存设置</button>
       <button class="btn" id="lr-goloan">去「物资借用」页 ›</button></div>
@@ -4112,7 +4225,7 @@ function generalBody(body, s) {
         </div>
       </label>
     </div>
-    <label class="check" style="margin:4px 0 12px;display:block"><input type="checkbox" id="u-auto" ${U.auto ? 'checked' : ''}> 每天自动查询是否有新版本</label>
+    <label class="check" style="margin:4px 0 12px"><input type="checkbox" id="u-auto" ${U.auto ? 'checked' : ''}> 每天自动查询是否有新版本</label>
     <div class="row-flex" style="gap:8px;flex-wrap:wrap">
       <button class="btn primary" id="u-check">立即检查</button>
       ${U.has_update ? updateDlBtns(U) : ''}
@@ -4685,6 +4798,8 @@ function desktopBody(body) {
     const canMigrate = info.can_migrate !== false;
     const fromEnv = info.data_dir_source === 'env' || info.data_dir_source === 'instance';
     
+    const net = info.network || { ips: [], prefer_ip: '', prefer_effective: '', auto_ip: '', best_ip: '', panel_url: '', note: '' };
+    
     const hp = Number(hs.port) || 3443;
     const hsOn = !!hs.enable, hsRun = !!hs.running;
     const hsUrls = Array.isArray(hs.urls) ? hs.urls : [];
@@ -4693,10 +4808,10 @@ function desktopBody(body) {
     const hsEffPort = Number(hs.port) || (hsShared ? (Number(hs.http_port) || 3200) : 3443);
     const hsHttpPort = Number(hs.http_port) || 3200;
     const hsAddrHtml = hsUrls.length
-      ? `<div class="row-flex" style="gap:6px;flex-wrap:wrap;margin-top:4px">${hsUrls.map(u => `<span class="row-flex" style="gap:4px;align-items:center"><span class="tag mono">${esc(u)}</span><button class="btn sm ghost hs-copy" type="button" data-u="${esc(u)}">复制</button></span>`).join('')}</div>`
+      ? `<div class="row-flex" style="gap:6px;flex-wrap:wrap;margin-top:4px">${hsUrls.map((u, i) => `<span class="row-flex" style="gap:4px;align-items:center">${i === 0 && net.prefer_effective && net.prefer_effective !== '127.0.0.1' ? '<span class="badge green" title="默认对外地址；在下方「默认对外 IP」可换">默认</span>' : ''}<span class="tag mono">${esc(u)}</span><button class="btn sm ghost hs-copy" type="button" data-u="${esc(u)}">复制</button></span>`).join('')}</div>`
       : '<div class="muted" style="font-size:12px;margin-top:4px">未检测到局域网 IPv4 地址（本机只有回环地址时，局域网设备无法访问）</div>';
     const hsCertHtml = hcert
-      ? `<div class="muted" style="font-size:12px;margin-top:6px">证书：${esc(hcert.subject || '')}｜有效期至 ${esc(String(hcert.not_after || '').slice(0, 16))}（剩余 ${hcert.days_left} 天）｜已覆盖 ${(hcert.sans || []).length} 个地址名；证书与私钥存在数据目录的 <span class="mono">https/</span> 下，升级或换版本都不会被覆盖。</div>`
+      ? `<div class="muted" style="font-size:12px;margin-top:6px">证书：${esc(hcert.subject || '')}｜有效期至 ${esc(fmtDT(hcert.not_after))}（剩余 ${hcert.days_left} 天）｜已覆盖 ${(hcert.sans || []).length} 个地址名；证书与私钥存在数据目录的 <span class="mono">https/</span> 下，升级或换版本都不会被覆盖。</div>`
       : '';
     body.innerHTML = `<div class="card"><div class="card-body" style="max-width:720px">
       <h3 style="margin:0 0 8px">🖥 桌面 / 网络（Windows 安装版）</h3>
@@ -4717,6 +4832,21 @@ function desktopBody(body) {
         <button class="btn primary" id="ds-listen-save" ${isAdminLogged ? '' : 'disabled'}>保存监听设置</button>
       </div>
       <div class="hint" style="margin-top:8px">端口以你填写为准（1–65535）；<b>无论监听地址怎么设置，127.0.0.1 回环都由程序固定监听</b>，本机永远可通过 <span class="mono">http://127.0.0.1:${Number((info.listen || {}).port) || 3200}</span> 进入，避免配置后把自己锁在外面。保存后需重启程序生效（安装版由桌面守护自动重启；开发 / Web 直跑模式请手动重启）。</div>
+      <div style="border-top:1px dashed var(--divider);margin:12px 0"></div>
+      <div class="hint" style="font-weight:600;margin-bottom:6px">默认对外 IP（同一台设备有多个 IP 时）</div>
+      <div class="muted" style="font-size:12px;margin-bottom:6px">本机检测到 <b>${net.ips.length}</b> 个局域网地址。这里选定的地址将作为「<b>面板地址</b>」—— 邮件里的「管理面板」链接、安装版托盘 / 桌面快捷方式「打开面板」、HTTPS 地址列表的首项都用它。监听地址仍是 0.0.0.0（全部网卡），所以任何 IP 实际都能访问，这里只是决定“默认用哪个”。</div>
+      <div class="row-flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <label class="field" style="min-width:300px;margin:0"><span class="lab">默认对外地址</span>
+          <select class="input" id="ds-ip" ${isAdminLogged ? '' : 'disabled'}>
+            <option value="">自动（第一个可用：${esc(net.auto_ip || '—')}）</option>
+            ${(net.ips || []).map(x => `<option value="${esc(x.ip)}" ${net.prefer_ip === x.ip ? 'selected' : ''}>${esc(x.ip)} —— ${esc(x.iface)}</option>`).join('')}
+            <option value="127.0.0.1" ${net.prefer_ip === '127.0.0.1' ? 'selected' : ''}>127.0.0.1 —— 仅本机（不对外）</option>
+          </select></label>
+        <button class="btn primary" id="ds-ip-save" ${isAdminLogged ? '' : 'disabled'}>保存</button>
+        <button class="btn" id="ds-ip-refresh" type="button" title="重新检测本机网卡地址（插拔网线 / 换网络后点一下）">↻ 重新检测</button>
+        <span class="row-flex" style="gap:4px;align-items:center"><span class="tag">当前面板地址</span><span class="tag mono">${esc(net.panel_url || '')}</span><button class="btn sm ghost hs-copy" type="button" data-u="${esc(net.panel_url || '')}" title="复制面板地址">复制</button></span>
+      </div>
+      <div class="hint" style="margin-top:6px">${esc(net.note || '')}${net.prefer_ip && !net.prefer_effective ? '　⚠️ 原先选定的地址已不在本机网卡列表里，已临时按“自动”使用，请重新选择后保存。' : ''}</div>
       <div style="border-top:1px dashed var(--divider);margin:12px 0"></div>
       <div class="row-flex" style="gap:12px;align-items:center;flex-wrap:wrap">
         <div class="grow" style="min-width:260px"><b>HTTPS 访问（局域网手机调用摄像头 / 实时扫码）</b>
@@ -4772,6 +4902,19 @@ function desktopBody(body) {
         paint();
       } catch (e) { toast(e.message, 'err'); }
     };
+    
+    const ipPost = async ip => {
+      try {
+        const hide = loadingBox('保存中…');
+        let r; try { r = await api('/api/network/prefer', { method: 'POST', body: JSON.stringify({ ip }) }); } finally { hide(); }
+        toast((r && r.note) || '已保存');
+        paint();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    const ipSel = $('#ds-ip', body), ipSave = $('#ds-ip-save', body);
+    if (ipSave && !ipSave.disabled) ipSave.onclick = () => ipPost(ipSel ? ipSel.value : '');
+    const ipRf = $('#ds-ip-refresh', body);
+    if (ipRf) ipRf.onclick = async () => { await paint(); toast('已重新检测本机地址', 'info'); };
     
     const hsForm = () => {
       const sh = $('#hs-share', body);
@@ -5103,7 +5246,7 @@ function maintainBody(body) {
       en.checked = !!d.enabled; dn.value = d.days; if (hr) hr.value = String(d.hour);
       const list = (d.all_files && d.all_files.length) ? d.all_files : (d.files || []);
       if (box) box.innerHTML = list.length
-        ? `<table class="tbl"><thead><tr><th>文件</th><th>类型</th><th class="num">大小</th><th class="num">备份时间</th><th>操作</th></tr></thead><tbody>${list.map(f => `<tr><td class="mono">${esc(f.name)}</td><td>${f.kind === 'auto' ? '<span class="badge green">定时备份</span>' : '<span class="badge gray">操作前留存</span>'}</td><td class="num">${fmtSize(f.size)}</td><td class="num muted">${esc(String(f.mtime || '').slice(0, 16).replace('T', ' '))}</td><td><button class="btn sm" data-abdl="${esc(f.name)}">下载</button> <button class="btn sm" data-abrs="${esc(f.name)}">恢复</button></td></tr>`).join('')}</tbody></table>`
+        ? `<table class="tbl"><thead><tr><th>文件</th><th>类型</th><th class="num">大小</th><th class="num">备份时间</th><th>操作</th></tr></thead><tbody>${list.map(f => `<tr><td class="mono">${esc(f.name)}</td><td>${f.kind === 'auto' ? '<span class="badge green">定时备份</span>' : '<span class="badge gray">操作前留存</span>'}</td><td class="num">${fmtSize(f.size)}</td><td class="num muted">${esc(fmtDT(f.mtime))}</td><td><button class="btn sm" data-abdl="${esc(f.name)}">下载</button> <button class="btn sm" data-abrs="${esc(f.name)}">恢复</button></td></tr>`).join('')}</tbody></table>`
         : '<div class="hint">还没有备份文件；开启后到执行时刻（或点“立即备份一次”）生成。</div>';
     }
   };
@@ -6657,6 +6800,20 @@ function globalSearchInit() {
 
 
 const CHANGELOG = [
+  {
+    ver: '0.11.2', title: '盘库更好用：顺序可自定义、盘点表数量口径统一、时间显示修正', date: '2026-10',
+    items: [
+      '盘库表顺序<b>可以自己定了</b>：按实际货架 / 台账顺序盘更顺手 —— 可以<b>下载顺序模板</b>填好后导入，也可以直接在盘库表里把某行的<b>「序号」改成想要的位置</b>（改完自动重排），再点 <b>「💾 记住当前顺序」</b>固定下来（随时可 <b>「↺ 系统顺序」</b>恢复按编码排列）。',
+      '记住的顺序对<b>盘库页和导出的盘点表都生效</b>：导出时也按同一顺序列出，生成的行与货架一一对应。',
+      '盘点表里<b>「本次计算数量」固定跟随「实物盘点数量」</b>，两者永远一致（该列改为只读，避免手改后对不上）。',
+      '开始盘库时自动带出上一次的数：<b>「上次盘点后数量」= 上次实物盘点结果</b>，「本次计算数量 / 实物盘点数量」预填当前实时库存，直接改实物数就行。',
+      '盘库页与导出的盘点表<b>自动带出物资自带的备注</b>（如存放要求、配件说明），要改直接改并会保存到盘点记录。',
+      '盘库表里<b>动过的行会整行黄底高亮</b>，改回原值即取消，一眼看出这次盘了哪几行。',
+      '修正<b>时间显示偏 8 小时</b>：日志、备份、证书到期等时间统一按 <b>UTC+8</b> 显示。',
+      '全面板上的「开关」都改成<b>滑块开关</b>（滑块移到右侧、轨道变绿＝已开启），不再出现小方框勾选框；表格里的批量勾选不受影响。',
+      '同一台设备有多个 IP 时（有线 / 无线 / VPN / 虚拟机网卡…），可以在 <b>系统设置 → 桌面/网络 → 默认对外 IP</b> 里<b>指定用哪个地址</b>：邮件里的面板链接、托盘「打开面板」、HTTPS 地址列表首项都跟着它；没指定时仍自动取第一个可用地址。',
+    ],
+  },
   {
     ver: '0.11.1', title: '新增 HTTPS 访问（手机扫码）；扫码支持一维条码 + 对焦优化', date: '2026-10',
     items: [

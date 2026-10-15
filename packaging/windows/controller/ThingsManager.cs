@@ -12,6 +12,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Net;                  
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Principal;
@@ -87,6 +88,35 @@ namespace ThingsManager
                 return port;
             }
             return 3200;
+        }
+        
+        
+        public static string ReadPreferIp()
+        {
+            try
+            {
+                if (File.Exists(CfgFile))
+                {
+                    string text = File.ReadAllText(CfgFile);
+                    int key = text.IndexOf("\"preferIp\"", StringComparison.OrdinalIgnoreCase);
+                    if (key >= 0)
+                    {
+                        int colon = text.IndexOf(':', key);
+                        if (colon >= 0)
+                        {
+                            int q1 = text.IndexOf('"', colon + 1);
+                            if (q1 >= 0)
+                            {
+                                int q2 = text.IndexOf('"', q1 + 1);
+                                if (q2 > q1) return text.Substring(q1 + 1, q2 - q1 - 1).Trim();
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+            string env = Environment.GetEnvironmentVariable("THM_PREFER_IP");
+            return env == null ? "" : env.Trim();
         }
     }
 
@@ -685,8 +715,13 @@ namespace ThingsManager
         }
 
         
+        
         public static string GetLanIp()
         {
+            
+            string pref = Paths.ReadPreferIp();
+            if (pref == "127.0.0.1") return "127.0.0.1";
+            if (pref.Length > 0 && IsLocalIPv4(pref)) return pref;
             try
             {
                 foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
@@ -721,6 +756,24 @@ namespace ThingsManager
             }
             catch { }
             return null;
+        }
+
+        
+        public static bool IsLocalIPv4(string ip)
+        {
+            try
+            {
+                IPAddress want = IPAddress.Parse(ip);
+                foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    foreach (UnicastIPAddressInformation u in ni.GetIPProperties().UnicastAddresses)
+                    {
+                        if (u.Address.AddressFamily == AddressFamily.InterNetwork && u.Address.Equals(want)) return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
         }
 
         

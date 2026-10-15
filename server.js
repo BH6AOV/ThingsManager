@@ -24,7 +24,7 @@ const { spawnSync, spawn } = require('child_process');
 
 
 
-const APP_VERSION = '0.11.1';
+const APP_VERSION = '0.11.2';
 
 const ROOT = __dirname;
 
@@ -589,6 +589,14 @@ db.exec(`CREATE TABLE IF NOT EXISTS app_logs(
   created_at TEXT NOT NULL
 );`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_app_logs_ts ON app_logs(ts);');
+
+ db.exec(`CREATE TABLE IF NOT EXISTS count_order(
+  seq INTEGER NOT NULL,
+  code TEXT PRIMARY KEY,
+  updated_at TEXT NOT NULL
+);`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_count_order_seq ON count_order(seq);');
+const iCountOrder = db.prepare('INSERT INTO count_order(seq,code,updated_at) VALUES(?,?,?)');
 const iInst = db.prepare('INSERT INTO instruments(name,serial_no,spec,location,status,last_date,expire_date,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
 const iMed = db.prepare('INSERT INTO medicines(name,mcode,spec,unit,batch,prod_date,expire_date,in_date,source,barcode,code,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)');
 const iDmg = db.prepare('INSERT INTO damaged_items(sku_id,sku_code,name,spec,unit,location,qty,sn,reason,status,operator,date,remark,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
@@ -644,7 +652,12 @@ function ledgerEnsureSku(kind, curSkuId, o) {
 const uSnOut = db.prepare("UPDATE serial_numbers SET status='out', out_doc_id=?, out_at=?, remark=? WHERE id=?");
 
 
-function now() { const d = new Date(); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; }
+
+
+
+
+process.env.TZ = process.env.THM_TZ || 'Asia/Shanghai';
+function now() { const d = new Date(Date.now() + 8 * 3600 * 1000); const p = n => String(n).padStart(2, '0'); return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`; }
 function today() { return now().slice(0, 10); }
 function dateOf(iso) { return iso ? String(iso).slice(0, 10) : today(); }
 
@@ -766,6 +779,7 @@ function settingsObj() {
   return {
     default_operator: o.default_operator || '', default_party: o.default_party || '', default_location: o.default_location || '', company: o.company || '', instance_name: o.instance_name || '', peer_token: o.peer_token || '', auth_mode: o.auth_mode || 'open', brand_logo: o.brand_logo || '', brand_bg: o.brand_bg || '',
     loan_remind: o.loan_remind || '1', loan_default_days: o.loan_default_days || '', 
+    thm_prefer_ip: o.thm_prefer_ip || '', 
     auto_backup: o.auto_backup || '0', auto_backup_days: o.auto_backup_days || '7', auto_backup_hour: o.auto_backup_hour || '4', auto_backup_last: o.auto_backup_last || '', 
     update_source: o.update_source || 'github', update_auto: o.update_auto === undefined ? '1' : o.update_auto, 
   };
@@ -1132,7 +1146,7 @@ function fmtRowsForDoc(doc, lines) {
       const book = l.book_qty, actual = l.actual_qty, diff = actual - book;
       const L = lastCountActual(l.sku_id, doc.id);
       const snNote = l.sn || '';
-      records.push({ sku_code: l.sku_code, name: l.name, spec: l.spec, unit: l.unit, category: catNameOf(sku), location: (l.location || (sku ? sku.location : '') || ''), book_qty: book, actual_qty: actual, diff, last_qty: L, change_qty: book - L, calc_qty: book, sn: snNote, remark: l.remark || '', snManaged, _sns: [] });
+      records.push({ sku_code: l.sku_code, name: l.name, spec: l.spec, unit: l.unit, category: catNameOf(sku), location: (l.location || (sku ? sku.location : '') || ''), book_qty: book, actual_qty: actual, diff, last_qty: L, change_qty: book - L, calc_qty: actual, sn: snNote, remark: (l.remark || (sku ? sku.remark : '') || ''), snManaged, _sns: [] });
     }
   }
   return { records, total };
@@ -1863,7 +1877,7 @@ app.post('/api/logs/clear', wrap((req, res) => {
 
 function saveSettingsAll(body) {
   const s = settingsObj();
-  for (const k of ['default_operator', 'default_party', 'default_location', 'company', 'instance_name', 'peer_token', 'loan_remind', 'loan_default_days', 'auto_backup', 'auto_backup_days', 'auto_backup_hour', 'thm_host', 'thm_port']) if (typeof body[k] === 'string') setSetting(k, body[k]);
+  for (const k of ['default_operator', 'default_party', 'default_location', 'company', 'instance_name', 'peer_token', 'loan_remind', 'loan_default_days', 'auto_backup', 'auto_backup_days', 'auto_backup_hour', 'thm_host', 'thm_port', 'thm_prefer_ip']) if (typeof body[k] === 'string') setSetting(k, body[k]);
   return settingsObj();
 }
 
@@ -1962,6 +1976,10 @@ const API_DOC_GROUPS = [
     ['GET', '/api/templates/sample/:key', '下载内置示例模板'],
     ['GET', '/api/templates/:key/layout', '模板版式 + 示例行（前端实时渲染效果图，不依赖原生组件）'],
     ['GET', '/api/countsheet', '盘库基行（按物资 id 取上次盘点 / 账面数量）'],
+    ['GET', '/api/count/order', '盘库顺序（按指定顺序导出盘点表：取出已保存的物资编码顺序）'],
+    ['POST', '/api/count/order', '盘库顺序保存 / 清除（codes 数组或 clear=true）'],
+    ['GET', '/api/count/order/template', '下载盘库顺序表模板 xlsx（第一列物资编码，按此顺序导出）'],
+    ['POST', '/api/count/order/import', '导入盘库顺序表 xlsx（只读第一列物资编码的顺序）'],
     ['GET', '/api/export/docs/:id', '导出单据 xlsx'],
     ['GET', '/api/export/inventory', '导出库存 / 清单 xlsx'],
     ['POST', '/api/export/preview', '按自定义内容导出 xlsx（含盘存表手工修正，不改账面）'],
@@ -2076,6 +2094,8 @@ const API_DOC_GROUPS = [
     ['GET', '/api/desktop/info', '桌面运行信息：数据目录（含来源） / 监听 / 自启方式'],
     ['POST', '/api/desktop/autostart', '设置开机自启（body: {enabled:true|false}；安装版写入 Windows 服务启动类型）', 'admin'],
     ['POST', '/api/desktop/listen', '设置监听地址 / 端口（安装版同时写入运行配置）', 'admin'],
+    ['GET', '/api/network/info', '本机网卡 IP 列表 + 当前默认对外地址（面板地址用它）'],
+    ['POST', '/api/network/prefer', '设置默认对外 IP（同机多 IP 时选用；传空字符串=自动；安装版同时写入运行配置）', 'admin'],
     ['POST', '/api/desktop/data', '迁移数据目录（需绝对路径、目标为空目录；写运行配置后重启生效；环境变量启动的实例写“本实例专属设置”）', 'admin'],
     ['POST', '/api/desktop/data/revert', '清除本实例专属数据目录设置（恢复为环境变量指定的目录）', 'admin'],
     ['POST', '/api/desktop/restart', '重启平台（安装版由守护自动拉起；开发模式以新进程重启）', 'admin'],
@@ -2959,6 +2979,29 @@ app.get('/api/templates/:key/layout', asy(async (req, res) => {
 
 
 
+function countOrderList() { return sall('SELECT code FROM count_order ORDER BY seq, rowid').map(r => String(r.code)); }
+function countOrderMap() { const m = new Map(); countOrderList().forEach((c, i) => m.set(c, i)); return m; }
+function countOrderSet(codes) {
+  const uniq = [...new Set((codes || []).map(c => String(c == null ? '' : c).trim()).filter(Boolean))];
+  tx(() => {
+    db.prepare('DELETE FROM count_order').run();
+    const t = now();
+    uniq.forEach((c, i) => iCountOrder.run(i, c, t));
+  });
+  return uniq.length;
+}
+function countOrderSort(rows) {
+  const m = countOrderMap();
+  if (!m.size) return rows;
+  return rows.map((r, i) => ({ r, i })).sort((a, b) => {
+    const ka = m.has(a.r.sku_code) ? m.get(a.r.sku_code) : Infinity;
+    const kb = m.has(b.r.sku_code) ? m.get(b.r.sku_code) : Infinity;
+    return ka - kb || a.i - b.i;                       
+  }).map(x => x.r);
+}
+
+
+
 function computeCountRows(ids) {
   const stock = stockMap();
   const out = [];
@@ -2967,15 +3010,104 @@ function computeCountRows(ids) {
     if (!sku) continue;
     const book = sku.sn_managed ? snInCount(id) : (stock.get(id) || 0);
     const L = lastCountActual(id);
-    out.push({ sku_id: id, sku_code: sku.sku_code, name: sku.name, spec: sku.spec, unit: sku.unit, location: sku.location, category: catNameOf(sku), sn_managed: sku.sn_managed, last: L, change: 0, calc: book, actual: book, remark: '' });
+    out.push({ sku_id: id, sku_code: sku.sku_code, name: sku.name, spec: sku.spec, unit: sku.unit, location: sku.location, category: catNameOf(sku), sn_managed: sku.sn_managed, last: L, change: 0, calc: book, actual: book, remark: sku.remark || '' });
   }
-  return out;
+  return countOrderSort(out);
 }
 app.get('/api/countsheet', wrap((req, res) => {
   if (!needLogin(req, res)) return;
   const ids = String(req.query.ids || '').split(',').map(Number).filter(Boolean);
   if (!ids.length) throw new Error('未选择要盘点的物资');
   ok(res, { rows: computeCountRows(ids) });
+}));
+
+app.get('/api/count/order', wrap((req, res) => {
+  if (!needLogin(req, res)) return;
+  const codes = countOrderList();
+  ok(res, { codes, count: codes.length, updated_at: (sget('SELECT MAX(updated_at) AS t FROM count_order') || {}).t || '' });
+}));
+app.post('/api/count/order', wrap((req, res) => {
+  if (!needAdmin(req, res)) return;
+  const b = req.body || {};
+  if (b.clear) {
+    db.prepare('DELETE FROM count_order').run();
+    return ok(res, { codes: [], count: 0, note: '已清除自定义顺序，恢复系统默认顺序' });
+  }
+  const codes = Array.isArray(b.codes) ? b.codes : [];
+  const n = countOrderSet(codes);
+  const known = new Set(sall('SELECT sku_code FROM skus').map(r => String(r.sku_code)));
+  const unknown = [...new Set(codes.map(c => String(c == null ? '' : c).trim()).filter(c => c && !known.has(c)))];
+  ok(res, {
+    codes: countOrderList(), count: n, unknown,
+    note: unknown.length ? `已保存 ${n} 条顺序；其中 ${unknown.length} 条编码在本库中不存在（已留存，不影响导出）` : `已保存 ${n} 条顺序`,
+  });
+}));
+
+app.get('/api/count/order/template', asy(async (req, res) => {
+  if (!needLogin(req, res)) return;
+  const ExcelJSX = require('exceljs');
+  const wb = new ExcelJSX.Workbook();
+  wb.creator = 'ThingsManager';
+  const ws = wb.addWorksheet('盘库顺序');
+  ws.addRow(['物资编码', '物资名称', '物资类别', '存放位置', '单位']);
+  const head = ws.getRow(1);
+  head.font = { bold: true };
+  head.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F4F8' } }; });
+  const rows = countOrderSort(sall("SELECT s.sku_code, s.name, c.name AS category_name, s.location, s.unit FROM skus s LEFT JOIN categories c ON c.id=s.category_id WHERE s.active=1 AND s.kind='sku' ORDER BY s.sku_code"));
+  for (const r of rows) ws.addRow([r.sku_code || '', r.name || '', r.category_name || '', r.location || '', r.unit || '']);
+  ws.getColumn(1).width = 26; ws.getColumn(2).width = 24; ws.getColumn(3).width = 16;
+  ws.getColumn(4).width = 18; ws.getColumn(5).width = 8;
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  const tip = wb.addWorksheet('填写说明');
+  ['盘库顺序表 · 填写说明', '', '1. 只读「盘库顺序」表的第 1 列「物资编码」：把它按你想要的顺序排列即可（整行一起拖动 / 剪切粘贴都行）。', '2. 「物资名称 / 物资类别 / 存放位置 / 单位」仅供核对，改了也不会生效。', '3. 不需要的物资可以删掉整行；未在表中出现的物资会自动排到末尾（不会丢）。', '4. 保存后回到「盘库」页，点「⬆ 导入顺序表」选择本文件；成功后盘库页与导出盘点表都按这个顺序。'].forEach(t => tip.addRow([t]));
+  tip.getColumn(1).width = 100;
+  sendXlsx(res, Buffer.from(await wb.xlsx.writeBuffer()), `盘库顺序表_${today()}.xlsx`);
+}));
+
+app.post('/api/count/order/import', upload.single('file'), asy(async (req, res) => {
+  if (!needAdmin(req, res)) return;
+  if (!req.file) throw new Error('请选择顺序表文件');
+  const ExcelJSX = require('exceljs');
+  const wb = new ExcelJSX.Workbook();
+  await wb.xlsx.load(req.file.buffer);
+  const cellText = v => {
+    if (v == null) return '';
+    if (typeof v === 'object') {
+      if (v.richText) return v.richText.map(x => x.text).join('');
+      if (v.text != null) return String(v.text);
+      if (v.result != null) return String(v.result);
+      return '';
+    }
+    return String(v);
+  };
+  
+  let codes = [], codeCol = 1, usedSheet = '';
+  for (const ws of wb.worksheets) {
+    const headRow = (() => {
+      for (let r = 1; r <= Math.min(10, ws.rowCount); r++) {
+        for (let c = 1; c <= Math.min(12, ws.columnCount); c++) {
+          if (/编码|code/i.test(cellText(ws.getCell(r, c).value))) return { r, c };
+        }
+      }
+      return null;
+    })();
+    const start = headRow ? headRow.r + 1 : 1;
+    codeCol = headRow ? headRow.c : 1;
+    const list = [];
+    for (let r = start; r <= ws.rowCount; r++) {
+      const t = cellText(ws.getCell(r, codeCol).value).trim();
+      if (t) list.push(t);
+    }
+    if (list.length) { codes = list; usedSheet = ws.name; break; }
+  }
+  if (!codes.length) throw new Error('没从文件中读到物资编码（请用「⬇ 顺序模板」导出后排序再传回，第一列放物资编码）');
+  const n = countOrderSet(codes);
+  const known = new Set(sall('SELECT sku_code FROM skus').map(r => String(r.sku_code)));
+  const unknown = [...new Set(codes.filter(c => !known.has(c)))];
+  ok(res, {
+    sheet: usedSheet, count: n, total_read: codes.length, unknown,
+    note: `已按顺序表保存 ${n} 条顺序（读了 ${codes.length} 行）` + (unknown.length ? `；有 ${unknown.length} 条编码本库不存在（已留存，不影响导出）` : ''),
+  });
 }));
 app.get('/api/export/docs/:id', asy(async (req, res) => {
   const doc = sget('SELECT * FROM documents WHERE id=?', Number(req.params.id));
@@ -3055,12 +3187,9 @@ app.post('/api/export/preview', asy(async (req, res) => {
       const num = (v, fb) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : fb; };
       const last = num(o.last_qty, base.last);
       const actual = num(o.actual_qty, base.actual); 
-      const calc = num(o.calc_qty, actual); 
-      let change;
-      if (o.change_qty != null && o.change_qty !== '') change = num(o.change_qty, 0);
-      else if (o.actual_qty != null && o.actual_qty !== '') change = actual - last; 
-      else change = 0;
-      const rm = o.remark != null ? String(o.remark) : base.remark;
+      const calc = actual;                            
+      const change = actual - last;                   
+      const rm = (o.remark != null && String(o.remark) !== '') ? String(o.remark) : (base.remark || '');   
       return { sku_code: base.sku_code, name: base.name, spec: base.spec, unit: base.unit, category: base.category, location: base.location, book_qty: calc, calc_qty: calc, last_qty: last, change_qty: change, actual_qty: actual, diff: actual - calc, remark: rm, _sns: [] };
     });
     const dp = dateParts(body.date);
@@ -3068,7 +3197,7 @@ app.post('/api/export/preview', asy(async (req, res) => {
     (body.free_rows || []).forEach(f => {
       const n2 = (v) => { const x = parseInt(v, 10); return Number.isFinite(x) ? x : 0; };
       const act = n2(f.actual);
-      records.push({ sku_code: f.code || '', name: f.name || '', spec: f.model || '', unit: f.unit || '', category: f.category || '', location: f.loc || '', book_qty: act, calc_qty: n2(f.calc || act), last_qty: n2(f.last), change_qty: n2(f.change), actual_qty: act, diff: 0, remark: f.remark || '', _sns: [] });
+      records.push({ sku_code: f.code || '', name: f.name || '', spec: f.model || '', unit: f.unit || '', category: f.category || '', location: f.loc || '', book_qty: act, calc_qty: act, last_qty: n2(f.last), change_qty: n2(f.change), actual_qty: act, diff: 0, remark: f.remark || '', _sns: [] });
     });
     const ctx = { doc_no: body.doc_no || '', date: `${dp.year}-${dp.month}-${dp.day}`, year: dp.year, month: dp.month, day: dp.day, party: '', operator: body.operator || getSetting('default_operator', ''), location: body.location || getSetting('default_location', ''), remark: body.remark || '', company: body.company || getSetting('company', ''), total_qty: records.length, total_lines: records.length, type: 'count' };
     const buf = await renderToBuffer('count', records, ctx);
@@ -3793,7 +3922,9 @@ app.get('/api/desktop/info', wrap((req, res) => {
   ok(res, { desktop: isDesktopRun(), data_dir: DATA_DIR, data_dir_source: src, can_migrate: true,
     env_data_dir: instanceDirKey() || null, instance_override: instanceDirOverride() || null,
     env_vars: envProvided('THM_DATA') ? ['THM_DATA'] : [],
-    config_file: CONFIG_FILE, listen: { host: LISTEN_HOST, port: PORT }, autostart: autostartCfg() });
+    config_file: CONFIG_FILE, listen: { host: LISTEN_HOST, port: PORT }, autostart: autostartCfg(),
+    
+    network: networkInfo() });
 }));
 app.post('/api/desktop/autostart', wrap((req, res) => {
   if (!needAdmin(req, res)) return;
@@ -3813,6 +3944,22 @@ app.post('/api/desktop/listen', wrap((req, res) => {
   
   if (isDesktopRun()) { const cfg = readRuntimeCfg(); cfg.host = host; cfg.port = port; writeRuntimeCfg(cfg); }
   ok(res, { host, port, note: `已保存监听设置，重启后生效：http://${host}:${port}（本机 127.0.0.1:${port} 固定可用；安装版在托盘图标菜单点「重启服务」）` });
+}));
+
+
+
+app.get('/api/network/info', wrap((req, res) => {
+  if (!needLogin(req, res)) return;
+  ok(res, networkInfo());
+}));
+app.post('/api/network/prefer', wrap((req, res) => {
+  if (!needAdmin(req, res)) return;
+  const v = String((req.body && req.body.ip) || '').trim();
+  if (v && v !== '127.0.0.1' && !localIpList().some(x => x.ip === v)) throw new Error('该地址不在本机当前的网卡列表里（请刷新后重新选择）');
+  setSetting('thm_prefer_ip', v);
+  
+  if (isDesktopRun()) { const cfg = readRuntimeCfg(); cfg.preferIp = v; writeRuntimeCfg(cfg); }
+  ok(res, Object.assign(networkInfo(), { note: v ? `已设为默认对外地址：${v}` : '已恢复自动选择（用第一个可用的局域网地址）' }));
 }));
 
 
@@ -6109,13 +6256,7 @@ const MAIL_TPL_HELP = [
 function mailTplOf(key) { const v = getSetting(MAIL_TPL_SETTING[key], ''); return v === '' ? MAIL_TPL_DEF[key] : v; }
 function mailTplAll() { const o = {}; for (const k of MAIL_TPL_KEYS) o[k] = mailTplOf(k); return o; }
 
-function panelUrl() {
-  try {
-    const nis = os.networkInterfaces();
-    for (const name of Object.keys(nis)) for (const a of nis[name] || []) if (a && a.family === 'IPv4' && !a.internal) return `http://${a.address}:${PORT}`;
-  } catch {  }
-  return `http://127.0.0.1:${PORT}`;
-}
+function panelUrl() { return `http://${bestIp()}:${PORT}`; }
 
 function mailRich(t) {
   return String(t == null ? '' : t)
@@ -6645,7 +6786,10 @@ function httpsCfg() {
   const sep = (Number.isInteger(p) && p > 0 && p <= 65535) ? p : HTTPS_DEFAULT_PORT;
   return { enable, shared, sep_port: sep, port: shared ? PORT : sep };
 }
-function localIpv4s() {
+
+
+
+function localIpList() {
   const out = [];
   try {
     const ifs = os.networkInterfaces();
@@ -6653,13 +6797,47 @@ function localIpv4s() {
       for (const a of (ifs[name] || [])) {
         if (!a || a.family !== 'IPv4' || a.internal) continue;
         if (/^169\.254\./.test(a.address)) continue;            
-        if (!out.includes(a.address)) out.push(a.address);
+        if (out.some(x => x.ip === a.address)) continue;
+        out.push({ ip: a.address, iface: name });
       }
     }
   } catch {  }
   return out;
 }
-function httpsUrls(port) { return localIpv4s().map(ip => `https://${ip}:${port}`); }
+function localIpv4s() { return localIpList().map(x => x.ip); }
+
+function preferIpSetting() { return String(getSetting('thm_prefer_ip', '') || '').trim(); }
+
+function preferIp() {
+  const v = preferIpSetting();
+  if (!v) return '';
+  if (v === '127.0.0.1') return v;
+  return localIpList().some(x => x.ip === v) ? v : '';
+}
+
+function bestIp() {
+  if (String(LISTEN_HOST || '') === '127.0.0.1') return '127.0.0.1';
+  const p = preferIp();
+  if (p) return p;
+  const l = localIpList();
+  return l.length ? l[0].ip : '127.0.0.1';
+}
+function networkInfo() {
+  const ips = localIpList();
+  const eff = preferIp(), listen = { host: LISTEN_HOST, port: PORT };
+  return {
+    ips, prefer_ip: preferIpSetting(), prefer_effective: eff, auto_ip: ips.length ? ips[0].ip : '', best_ip: bestIp(),
+    panel_url: panelUrl(), listen,
+    note: eff ? (eff === '127.0.0.1' ? '当前默认：仅本机（127.0.0.1，不对外）' : `当前默认对外地址：${eff}`) : (ips.length ? `未指定，自动使用第一个：${ips[0].ip}` : '未检测到局域网 IPv4 地址'),
+  };
+}
+
+function httpsUrls(port) {
+  const ips = localIpv4s();
+  const p = preferIp();
+  const ordered = (p && p !== '127.0.0.1' && ips.includes(p)) ? [p, ...ips.filter(x => x !== p)] : ips;
+  return ordered.map(ip => `https://${ip}:${port}`);
+}
 function httpsSans() {
   const host = os.hostname() || 'thingsmanager';
   return [...new Set(['localhost', '127.0.0.1', '::1', host, host + '.local', ...localIpv4s()].filter(Boolean))];
@@ -6909,7 +7087,7 @@ function httpsInfoObj(req) {
   return {
     enable: cfg.enable, shared: cfg.shared, port, sep_port: cfg.sep_port, default_port: HTTPS_DEFAULT_PORT,
     running: httpsUp(), error: httpsErr,
-    urls: httpsUrls(port), ips: localIpv4s(), hostname: os.hostname(),
+    urls: httpsUrls(port), ips: localIpv4s(), prefer_ip: preferIpSetting(), prefer_effective: preferIp(), hostname: os.hostname(),
     http_port: PORT, cert: httpsCertInfo(readTextOr(HTTPS_CERT_FILE)), cert_dir: HTTPS_DIR,
     on_https: !!(req && req.secure),
   };
